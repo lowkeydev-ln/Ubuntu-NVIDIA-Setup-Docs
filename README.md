@@ -3,6 +3,7 @@ Este repositorio le permite al usuario realizar la preparación de los equipos c
 
 ## Índice
 - [Requisitos previos](#requisitos-previos)
+- [Instalación de Sistema Operativo Ubuntu](#instalación-ubuntu)
 - [Instalación de controladores NVIDIA](#instalación-de-controladores-nvidia)
 - [Configuraciones opcionales](#configuraciones-opcionales)
 - [Solución de problemas](#solución-de-problemas)
