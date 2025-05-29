@@ -20,8 +20,8 @@
 1. Para lograr tener una instalación limpia, lo primero que debemos hacer es entrar a la BIOS del equipo y configurar ciertos parámetros:
    1. Para acceder a la BIOS en caso de que el equipo sea completamente nuevo es sencillo ya que lo hará directamente.
    2. En el caso de que se vaya a reutilizar un equipo, se debe reiniciar el equipo y presionar una de las siguientes teclas:
-      - DELETE
-      - SUPR
+      - BACKSPACE
+      - DEL/SUPR
       - F2
       - F8
       - F11
