@@ -44,9 +44,7 @@
    - Marcamos las opciones de 'Instalar software de terceros para gráficos y dispositivos de Wifi', como también 'Descargar e instalar compatibilidad para más formatos multimedia'
    - En el apartado de disco, elegimos 'Borrar disco e Instalar Ubuntu'
 9. Una vez hecha esta configuración inicial, viene el apartado de las credenciales del equipo, aquí se hace una diferencia dependiendo si el equipo será de Compresión o de Analítica:
-    - En caso de ser de Compresión, el usuario es omnifish, el nombre del equipo debe ser omnifish y la contraseña debe ser Omniaño
-    - En caso de ser de Analítica, el usuario debe ser analytic, el nombre del equipo debe ser analytic-omnifish y la contraseña debe ser Omniaño%
-    - Finalmente, desmarcamos la opción de 'Solicitar mi contraseña para acceder' y seguimos con el proceso de instalación.
+    - Es importante que desmarquemos la opción de 'Solicitar mi contraseña para acceder' y seguimos con el proceso de instalación.
 10. Para finalizar la instalación de Ubuntu, seleccionamos el uso horario de Santiago y en la pestaña siguiente chequeamos que estén todos los datos correctos y presionamos 'Instalar'.
 11. Dejamos que se instale todo correctamente, cuando finalice la instalación aparecerá una ventana pidiéndonos reiniciar el equipo, por lo que presionamos el botón de Reiniciar que aparece en la ventana y dejamos que el equipo se reinicie para que aplique la instalación.
 12. Cuando esté reiniciando en pantalla nos arrojará un mensaje de sacar la unidad flash con la que booteamos inicialmente y luego presionamos la tecla 'Enter'. Con esto damos por finalizada la instalación del sistema operativo Ubuntu.
