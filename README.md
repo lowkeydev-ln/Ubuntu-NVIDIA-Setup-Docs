@@ -396,26 +396,25 @@ sudo apt install ffmpeg
       ```
       2. Una vez dentro de la consola de MongoDB, copiamos y pegamos el siguiente comando:
       ```JavaScript
-      use FISHFLOW
+      use NOMBRE_BD
       db.createUser({
-       user: "analitic",
-       pwd: "Omni2024",
+       user: "USUARIO",
+       pwd: "PASSWORD",
        roles: [
         {
          role: "readWrite",
-         db: "FISHFLOW"
+         db: "NOMBRE_BD"
         }
        ]
       })
       ```
+      > [!Note]
+      > Cambiar NOMBRE_BD, USUARIO y PASSWORD por datos que realmente se van a utilizar
       3. Ahora que hemos creado la base de datos y un usuario para la misma, tenemos que realizar una última configuración utilizando el siguiente comando por terminal:
       ```bash
       sudo nano /etc/mongod.conf
       ```
-      4. Y en el apartado de '# network interfaces' modificamos 'bindIp', debemos cambiar el valor por:
-      ```txt
-      0.0.0.0
-      ```
+      4. Y en el apartado de '# network interfaces' modificamos 'bindIp' de ser necesario con el valor que necesitemos.
       5. Luego descomentamos 'security', bajamos una línea y presionamos 2 veces la tecla 'Espacio' para escribir:
       ```txt
       authorization: enabled
@@ -431,8 +430,10 @@ sudo apt install ffmpeg
    bash <(curl -sL https://raw.githubusercontent.com/node-red/linux-installers/master/deb/update-nodejs-and-nodered)
    ```
    2. Seguimos el paso a paso de las configuraciones donde:
-      - Usuario: omnifish
-      - Contraseña: OmniAño%
+      - Usuario: USUARIO_NODERED
+      - Contraseña: PASSWORD_NODERED
+   > [!Note]
+   > Cambiar USUARIO_NODERED y PASSWORD_NODERED por datos que realmente se van a utilizar
    3. Si se requiere que NodeRED inicie automáticamente:
    ```bash
    sudo systemctl enable nodered.service
