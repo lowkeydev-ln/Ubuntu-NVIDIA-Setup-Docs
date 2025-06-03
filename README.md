@@ -470,4 +470,45 @@ sudo systemctl set-default graphical.target
 sudo reboot
 sudo systemctl start gdm3
 ```
+---
+## 9.- Interfaces de red en placas muy nuevas
+
+Un problema que nos hemos cruzado al momento de prepara equipos con placas de ultima generación, es que el puerto Ethernet de la placa no es reconocido, por lo que se tiene que configurar de forma manual.
+
+1. Primero debemos asegurarnos de que el sistema este actualizado:
+```bash
+sudo apt update && sudo apt full-upgrade
+```
+2. Luego agregamos el repositorio al sistema:
+```bash
+sudo add-apt-repository ppa:awesometic/ppa
+```
+3. Actualizamos el directorio de repositorios del sistema:
+```bash
+sudo apt update
+```
+4. Instalamos los drivers de realtek para el controlador de red de la placa:
+```bash
+sudo apt install realtek-r8125-dkms
+```
+5. Bloqueamos el otro controlador para que no interfiera:
+```bash
+sudo tee /etc/modprobe.d/blacklist-r8169.conf <<EOF
+blacklist r8169
+EOF
+```
+6. Reconstruimos el kernel con estas nuevas consideraciones:
+```bash
+sudo update-initramfs -u
+```
+7. Reiniciamos para asegurarnos de que todo este funcionando correctamente:
+```bash
+sudo reboot
+```
+8. Una vez haya reiniciado el equipo, utilizamos el siguiente comando por terminal para cerciorarnos de que se este reconociendo el componente de red de la placa:
+```bash
+ip link show
+sudo lshw -class network | grep -A3 RTL8125
+```
+---
   
