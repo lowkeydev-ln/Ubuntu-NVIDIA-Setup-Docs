@@ -52,6 +52,12 @@
 
 ## 3.- Instalaciones y configuraciones necesarias para Ubuntu
 
+***Advertencia inicial (agregar en el documento):***  
+> ⚠️ **IMPORTANTE**  
+> - Este documento contiene comandos con `sudo` que pueden afectar el sistema.  
+> - Las credenciales mostradas son **EJEMPLOS**. Reemplázalas con tus propios datos.  
+> - Verifica la compatibilidad de drivers/CUDA con tu hardware antes de instalar.
+
 1. Lo primero que debemos hacer es actualizar las librerías y dependencias que actualmente tiene el sistema, por lo que ocuparemos la siguiente línea de código por terminal:
 
 ```bash
