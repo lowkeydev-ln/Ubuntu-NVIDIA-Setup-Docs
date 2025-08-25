@@ -93,7 +93,7 @@ sudo reboot
 4. Cuando nos encontremos de vuelta en el sistema, es momento de instalar las dependencias necesarias para instalar los drivers de NVIDIA:
 
 ```bash
-sudo apt install -y g++ freeglut3-dev build-essential libx11-dev libxmu-dev libxi-dev libglu1-mesa libglu1-mesa-dev pkg-config libglvnd-dev libgl1-mesa-dev libegl1-mesa-dev dkms mesa-utils inxi libgl1-mesa-glx libgl1-mesa-dri libglx-mesa0 xserver-xorg-core net-tools openssh-server ffmpeg
+sudo apt install -y g++ freeglut3-dev build-essential libx11-dev libxmu-dev libxi-dev libglu1-mesa libglu1-mesa-dev pkg-config libglvnd-dev libgl1-mesa-dev libegl1-mesa-dev dkms mesa-utils inxi libgl1-mesa-glx libgl1-mesa-dri libglx-mesa0 xserver-xorg-core net-tools openssh-server curl git
 ```
 
 5. Confirmamos la instalación con 'Y' y presionando la tecla 'Enter'.
