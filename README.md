@@ -24,10 +24,11 @@
 - Se debe descargar previamente la versión de Ubuntu que se desea utilizar:
   - Esta puede ser Ubuntu (22.04 LTS o 24.04 LTS).
   - Puede ser cualquiera de sus variantes (Mantener versionado):
-    - Kubuntu
+    - Kubuntu (Se puede utilizar, pero no lo recomiendo)
     - Xubuntu
     - Ubuntu Cinnamon
     - Lubuntu
+    - Ubuntu Budgie
   - También funciona con Linux Mint (21.x equivale a Ubuntu 22 y 22.x equivale a Ubuntu 24).
 - Se debe tener claro qué propósito cumplirá el equipo, normalmente se utilizan para Compresión/Data o Analítica. Ya que más adelante se hacen instalaciones específicas dependiendo del uso del equipo.
 
@@ -743,3 +744,4 @@ sudo lshw -class network | grep -A3 RTL8125
    - **Nota**: Si la salida de `lspci | grep Ethernet` muestra un controlador Realtek (como 'RTL8125'), estos pasos son adecuados. Si no aparece nada, el problema puede ser otro.
 
 ---
+
