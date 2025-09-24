@@ -1,6 +1,5 @@
 # Guía de Configuración de Estaciones de Trabajo Ubuntu con GPU NVIDIA
 
-**Hecho por Joaquin Osorio Valenzuela**
 
 ---
 
