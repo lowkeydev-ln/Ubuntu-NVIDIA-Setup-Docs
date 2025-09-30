@@ -136,8 +136,8 @@
      * Instale dependencia `libtinfo5` (necesaria para algunos drivers antiguos o herramientas):
 
        ```bash
-       wget http://archive.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.4+20231202-1_amd64.deb
-       sudo apt install ./libtinfo5_6.4+20231202-1_amd64.deb
+       wget http://security.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.3-2ubuntu0.1_amd64.deb
+       sudo apt install ./libtinfo5_6.3-2ubuntu0.1_amd64.deb
        rm libtinfo5_6.4+20231202-1_amd64.deb # Limpia el archivo descargado
        ```
 7. **Reinicio Final:** Reinicie el sistema para aplicar todos los cambios.
