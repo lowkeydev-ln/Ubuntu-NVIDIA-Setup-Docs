@@ -138,7 +138,7 @@
        ```bash
        wget http://security.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.3-2ubuntu0.1_amd64.deb
        sudo apt install ./libtinfo5_6.3-2ubuntu0.1_amd64.deb
-       rm libtinfo5_6.4+20231202-1_amd64.deb # Limpia el archivo descargado
+       rm libtinfo5_6.3-2ubuntu0.1_amd64.deb # Limpia el archivo descargado
        ```
 7. **Reinicio Final:** Reinicie el sistema para aplicar todos los cambios.
 
@@ -168,6 +168,7 @@
 3. **Eliminación de Drivers Antiguos:** Si ha instalado drivers de NVIDIA anteriormente (o paquetes como `nouveau`), es recomendable eliminarlos limpiamente.
 
    ```bash
+   sudo apt-get purge '^nvidia-.*'
    sudo apt-get purge nvidia-* --autoremove -y
    sudo apt-get autoremove -y
    ```
@@ -189,7 +190,7 @@
    * Dé permisos de ejecución al archivo `.run`:
 
      ```bash
-     chmod +x NVIDIA-Linux-x86_64-XXX.XX.run # Reemplace XXX.XX por el número de versión descargado
+     sudo chmod +x NVIDIA-Linux-x86_64-XXX.XX.run # Reemplace XXX.XX por el número de versión descargado
      ```
 6. **Instalación del Driver:**
 
@@ -229,6 +230,7 @@
 
    * Determine su versión de Ubuntu (22.04 o 24.04).
    * Siga los pasos en la [página de descargas de CUDA](https://developer.nvidia.com/cuda-downloads) para "Linux" -> "x86_64" -> "Ubuntu" -> "22.04" (o "24.04").
+   * Apoyarse en [página instalación CUDA oficial](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/#meta-packages)
    * *(Ejemplo para Ubuntu 22.04 y CUDA 12.8)*
 
      * Descargue la clave GPG:
@@ -378,6 +380,39 @@ Esta sección cubre las herramientas específicas necesarias para estaciones ded
      ```bash
      sudo apt install ./ipscan_<version>_amd64.deb # Reemplace <version> por el archivo descargado
      ```
+9. **Instalación de Anydesk y Rustdesk para soporte remoto**
+
+   * Para instalar anydesk debemos ejecutar el siguiente bloque de comandos en la terminal, de esta forma instalaremos el repositorio oficial .deb en nuestro y equipo se podrá actualizar cuando se actualicen los demás paquetes del sistema:
+
+      ```bash
+      # Add the AnyDesk GPG key
+      sudo apt update
+      sudo apt install ca-certificates curl apt-transport-https
+      sudo install -m 0755 -d /etc/apt/keyrings
+      sudo curl -fsSL https://keys.anydesk.com/repos/DEB-GPG-KEY -o /etc/apt/keyrings/keys.anydesk.com.asc
+      sudo chmod a+r /etc/apt/keyrings/keys.anydesk.com.asc
+      # Add the AnyDesk apt repository
+      echo "deb [signed-by=/etc/apt/keyrings/keys.anydesk.com.asc] https://deb.anydesk.com all main" | sudo tee /etc/apt/sources.list.d/anydesk-stable.list > /dev/null
+      # Update apt caches and install the AnyDesk client
+      sudo apt update
+      sudo apt install anydesk
+      ```
+
+   * Esto deja el repositorio y la aplicacion instalados, ahora debemos aseguranos de copiar el ID de nuestro anydesk y también configurar la contraseña
+
+   * Para instalar Rustdesk, debemos descargar el paquete de instalación y realizar la instalación
+
+   * Accedemos a [la página de descargas de Rustdesk](https://github.com/rustdesk/rustdesk/releases/tag/1.4.2)
+
+   * Luego descargamos la versión x86-64(64-bit) de Ubuntu
+
+   * Al descargar el paquete .deb, identificamos donde se encuentra el archivo de instalación y corremos lo siguiente por la terminal:
+    
+    ```bash
+    sudo apt install ./<paquete.deb>
+    ```
+    * Al igual que con Anydesk, tomamos nota del ID de Rustdesk y configuramos la contraseña unica.
+    * Lo que debemos estar atentos, es de marcar la casilla que permite la conexión con la IP directa.
 
 ---
 
