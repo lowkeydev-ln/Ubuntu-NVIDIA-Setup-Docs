@@ -282,14 +282,71 @@
 
 ## Anexo A: Identificación de GPUs NVIDIA
 
-...existing code...
+Esta tabla ayuda a identificar la generación de su GPU NVIDIA basándose en la salida de `lspci | grep VGA`.
+
+# NVIDIA GeForce RTX Serie 3000 - Identificación PCI
+
+Esta tabla lista los Device IDs para las tarjetas RTX de la serie 3000 (arquitectura Ampere), útiles para identificar con `lspci | grep VGA`.
+
+| Serie | Modelo      | Device ID (hex) |
+| ----- | ----------- | --------------- |
+| 3000  | RTX 3090    | 2204            |
+| 3000  | RTX 3090 Ti | 22C6            |
+| 3000  | RTX 3080    | 2206            |
+| 3000  | RTX 3080 Ti | 2382            |
+| 3000  | RTX 3070 Ti | 24C0            |
+| 3000  | RTX 3070    | 2484            |
+| 3000  | RTX 3060 Ti | 2489            |
+| 3000  | RTX 3060    | 2503            |
+| 3000  | RTX 3050 Ti | 2191            |
+| 3000  | RTX 3050    | 25A0            |
+
+# NVIDIA GeForce RTX Serie 4000 - Identificación PCI
+
+Esta tabla lista los Device IDs para las tarjetas RTX de la serie 4000 (arquitectura Ada Lovelace), útiles para identificar con `lspci | grep VGA`.
+
+| Serie | Modelo            | Device ID (hex) |
+| ----- | ----------------- | --------------- |
+| 4000  | RTX 4090          | 2684            |
+| 4000  | RTX 4080 Super    | 2702            |
+| 4000  | RTX 4080          | 2704            |
+| 4000  | RTX 4070 Ti Super | 26B0            |
+| 4000  | RTX 4070 Ti       | 2782            |
+| 4000  | RTX 4070 Super    | 2788            |
+| 4000  | RTX 4070          | 2786            |
+| 4000  | RTX 4060 Ti       | 28A3            |
+| 4000  | RTX 4060          | 2882            |
+| 4000  | RTX 4050          | 28A1            |
+
+# NVIDIA GeForce RTX Serie 5000 - Identificación PCI
+
+Esta tabla lista los Device IDs para las tarjetas RTX de la serie 5000 (arquitectura Blackwell), útiles para identificar con `lspci | grep VGA`. Nota: Los IDs están basados en datos iniciales de 2025 y podrían actualizarse.
+
+| Serie | Modelo      | Device ID (hex) |
+| ----- | ----------- | --------------- |
+| 5000  | RTX 5090    | 2B80            |
+| 5000  | RTX 5080    | 2B81            |
+| 5000  | RTX 5070 Ti | 2B82            |
+| 5000  | RTX 5070    | 2B83            |
+| 5000  | RTX 5060 Ti | 2B84            |
+| 5000  | RTX 5060    | 2B85            |
 
 ---
 
 ## Anexo B: Verificación de Compatibilidad
 
-...existing code...
+Antes de instalar drivers o CUDA, verifique la compatibilidad.
 
----
+1. **GPU y Driver NVIDIA:**
 
-> **¡Listo!** Esta versión mejorada mantiene todos los comandos originales y agrega explicaciones, tips y advertencias para facilitar la instalación y configuración. Si necesitas agregar más ejemplos, diagramas o una sección específica, házmelo saber.
+   * Visite [https://www.nvidia.com/drivers/](https://www.nvidia.com/drivers/).
+   * Seleccione su GPU y sistema operativo. La página mostrará los drivers compatibles.
+2. **Driver NVIDIA y CUDA Toolkit:**
+
+   * Visite [https://developer.nvidia.com/cuda-downloads](https://developer.nvidia.com/cuda-downloads).
+   * Busque la "CUDA Compatibility" o "CUDA Requirements" en la documentación o en la propia página de descargas.
+   * Por ejemplo, CUDA 12.8 requiere un driver de NVIDIA >= 525.x.
+   * Verifique la versión de su driver con `nvidia-smi`. El número de versión debe ser mayor o igual al mínimo requerido por CUDA.
+3. **CUDA Toolkit y Ubuntu:**
+
+   * La página de descargas de CUDA mencionada arriba también lista las versiones de Ubuntu soportadas para cada versión de CUDA Toolkit.

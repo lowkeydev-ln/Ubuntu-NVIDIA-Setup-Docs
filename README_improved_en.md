@@ -355,5 +355,3 @@ Then compare the hexadecimal Device ID with the following tables:
    * The CUDA download page lists supported Ubuntu versions for each CUDA Toolkit version.
 
 ---
-
-> **Done!** This improved version keeps all original commands and adds explanations, tips, and warnings to make installation and setup easier. If you need more examples, diagrams, or a specific section, let me know.
