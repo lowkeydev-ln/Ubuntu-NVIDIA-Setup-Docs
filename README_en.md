@@ -121,6 +121,33 @@
 
 * **Version-specific preparation**
   * **Ubuntu 22.04:** Install and configure GCC/G++ 12.
+  
+  GCC/G++ 12 (Ubuntu 22.04)
+  - Install the compilers:
+    ```bash
+    sudo apt update
+    sudo apt install -y gcc-12 g++-12
+    ```
+  - Register GCC/G++ 12 as alternatives and set them as default:
+    ```bash
+    # Register alternatives (priority 120)
+    sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 120
+    sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 120
+
+    # Manual selection in case multiple versions are installed
+    sudo update-alternatives --config gcc
+    sudo update-alternatives --config g++
+    ```
+  - Verify:
+    ```bash
+    gcc --version
+    g++ --version
+    ```
+  - (Optional) Ensure cc/c++ point to gcc/g++:
+    ```bash
+    sudo update-alternatives --install /usr/bin/cc cc /usr/bin/gcc 120
+    sudo update-alternatives --install /usr/bin/c++ c++ /usr/bin/g++ 120
+    ```
   * **Ubuntu 24.04:** Install the `libtinfo5` dependency (needed for some older drivers/tools). You can download the package directly from the official repository:
 
     [Download libtinfo5 for Ubuntu 24.04 (noble)](http://security.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.3-2ubuntu0.1_amd64.deb)
@@ -405,6 +432,38 @@ This method offers greater control over which components to install.
   sudo systemctl status mongod
   ```
 
+
+MongoDB Compass (GUI) – .deb method (primary)
+- Download the .deb installer from the official page:
+  https://www.mongodb.com/try/download/compass
+- If you have the direct link to a specific version, you can download with wget (replace <VERSION>):
+  ```bash
+  wget https://downloads.mongodb.com/compass/mongodb-compass_<VERSION>_amd64.deb
+  # Example (hypothetical):
+  # wget https://downloads.mongodb.com/compass/mongodb-compass_1.43.4_amd64.deb
+  ```
+- Install the package:
+  ```bash
+  sudo apt install -y ./mongodb-compass_<VERSION>_amd64.deb
+  ```
+- If missing dependencies appear:
+  ```bash
+  sudo apt --fix-broken install
+  ```
+  Then retry installing the .deb if necessary.
+- Run Compass:
+  ```bash
+  mongodb-compass &
+  ```
+- Quick verification:
+  - Open Compass and check that the connection screen appears.
+  - Connect to your local instance if you installed MongoDB server:
+    - URI: mongodb://localhost:27017
+- Uninstall (optional):
+  ```bash
+  sudo apt remove -y mongodb-compass
+  ```
+
 ### Recommended tools for compression/data
 
 Below are the installations of additional tools for compression/data workstations.
@@ -473,6 +532,17 @@ Below are the installations of additional tools for compression/data workstation
   echo "deb [signed-by=/etc/apt/keyrings/keys.anydesk.com.asc] https://deb.anydesk.com all main" | sudo tee /etc/apt/sources.list.d/anydesk-stable.list > /dev/null
   sudo apt update
   sudo apt install anydesk
+  ```
+  
+  Enable the required ports in the UFW firewall:
+  ```bash
+  # Recommended rules for AnyDesk:
+  # TCP 80, 443, and 6568 are used for signaling/connection
+  # UDP 50001-50003 is used for Discovery and connection optimization on LAN
+  sudo ufw allow 80/tcp
+  sudo ufw allow 443/tcp
+  sudo ufw allow 6568/tcp
+  sudo ufw allow 50001:50003/udp
   ```
   
   > **Important:** Take note of the Anydesk ID and set a unique password.
