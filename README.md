@@ -1,6 +1,6 @@
 # Guía Mejorada de Configuración de Estaciones de Trabajo Ubuntu con GPU NVIDIA
 
-> **Última actualización:** 7 de Mayo de 2026
+> **Última actualización:** 2 de Julio de 2026
 
 ---
 
@@ -819,7 +819,40 @@ sudo apt update
 sudo apt install -y anydesk
 ```
 
-#### Paso 2: Configura Firewall
+#### Paso 2: Configura el servicio para compatibilidad con NVIDIA y X11
+
+> **Importante:** En equipos con driver NVIDIA instalado por `.run` y Xorg forzado, el servicio de AnyDesk arranca como `root` sin acceso al display X11 del usuario. Sin este fix, AnyDesk crashea al inicio y genera un loop de CPU que congela el escritorio GNOME. Este paso es obligatorio en estaciones de compresión.
+
+Crea el override del servicio:
+
+```bash
+sudo mkdir -p /etc/systemd/system/anydesk.service.d
+sudo tee /etc/systemd/system/anydesk.service.d/override.conf > /dev/null << 'EOF'
+[Service]
+Environment=DISPLAY=:0
+Environment=XAUTHORITY=/run/user/1000/gdm/Xauthority
+Environment=LIBGL_ALWAYS_SOFTWARE=1
+ExecStartPre=/bin/sleep 5
+EOF
+```
+
+Aplica los cambios:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable anydesk
+sudo systemctl start anydesk
+```
+
+**Verificación (opcional):**
+```bash
+sudo systemctl status anydesk
+# Debería mostrar "active (running)" sin errores
+sudo systemctl cat anydesk | grep -A6 "override.conf"
+# Debería mostrar las 4 líneas del override
+```
+
+#### Paso 3: Configura Firewall
 ```bash
 sudo ufw allow 80/tcp
 sudo ufw allow 443/tcp
@@ -827,7 +860,7 @@ sudo ufw allow 6568/tcp
 sudo ufw allow 50001:50003/udp
 ```
 
-**Verificación (opcional):** Ejecuta `anydesk` y anota el ID.
+**Verificación (opcional):** Ejecuta `anydesk` desde el escritorio y anota el ID.
 
 ### Instalación de RustDesk (Soporte Remoto Alternativo)
 
@@ -875,6 +908,8 @@ netstat -tlnp | grep LISTEN  # Lista puertos abiertos
 - **EMQX falla:** Verifica puertos: `netstat -tlnp | grep 1883`.
 - **GStreamer plugins faltan:** `sudo apt install gstreamer1.0-plugins-*`.
 - **AnyDesk/RustDesk no conecta:** Desactiva firewall temporalmente para test.
+- **AnyDesk congela el escritorio al iniciar (gnome-shell al 70–100% CPU):** El servicio de AnyDesk no tiene acceso al display X11. Verifica que el override del Paso 2 esté aplicado con `sudo systemctl cat anydesk`. Si no aparece el bloque `override.conf`, repite el Paso 2 y ejecuta `sudo systemctl daemon-reload && sudo systemctl restart anydesk`. Síntoma adicional: aparece `_usr_bin_anydesk.1000.crash` en `/var/crash/`.
+- **AnyDesk muestra "Authorization required, but no authorization protocol specified":** El servicio arranca antes de que X11 esté listo o sin las variables `DISPLAY`/`XAUTHORITY`. El `ExecStartPre=/bin/sleep 5` del override corrige el timing; verifica que esté presente.
 
 > **Recursos Adicionales:**
 > * [MongoDB Docs](https://www.mongodb.com/docs/)
