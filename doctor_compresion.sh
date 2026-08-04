@@ -195,6 +195,10 @@ check_and_fix "Configuración CUDA en el sistema" "check_cuda_configured"
 # --- 7. MongoDB (Sección 6) ---
 section "7. MongoDB"
 
+check_manual "Kernel compatible con MongoDB 8 (fuera de 6.19-7.0.13)" \
+    "check_kernel_mongodb_ok" \
+    "Kernel $(uname -r) bloquea el arranque de mongod (SERVER-121912). Aplica la Sección 14 del README: volver al track GA 6.8."
+
 check_and_fix "MongoDB instalado (mongod)" \
     "command -v mongod" \
     "fix_mongodb_repo_and_install"
