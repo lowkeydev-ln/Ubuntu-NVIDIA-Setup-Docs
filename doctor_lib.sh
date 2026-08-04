@@ -318,6 +318,20 @@ check_nvidia_gpu() {
 }
 
 # =============================================================================
+# --- Verificación de kernel para MongoDB 8 ---
+# =============================================================================
+
+# MongoDB 8 se niega a arrancar en kernels 6.19 - 7.0.13 (SERVER-121912).
+# El guard de MongoDB lee el string de uname, no el sublevel upstream real, así que
+# comparamos exactamente lo mismo que mira MongoDB. Ver Sección 14 del README.
+# ponytail: dpkg --compare-versions en vez de parseo propio de versiones
+check_kernel_mongodb_ok() {
+    local kver="${1:-$(uname -r)}"
+    kver="${kver%%-*}"                                  # 7.0.0-28-generic -> 7.0.0
+    dpkg --compare-versions "$kver" lt 6.19
+}
+
+# =============================================================================
 # --- Verificación de paquetes Python ---
 # =============================================================================
 

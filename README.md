@@ -1,6 +1,6 @@
 # Guía Mejorada de Configuración de Estaciones de Trabajo Ubuntu con GPU NVIDIA
 
-> **Última actualización:** 2 de Julio de 2026
+> **Última actualización:** 4 de Agosto de 2026
 
 ---
 
@@ -19,6 +19,7 @@
 * [11. Script de Post-Instalación (Opcional)](#11-script-de-post-instalación-opcional)
 * [12. Scripts Doctor de Verificación](#12-scripts-doctor-de-verificación)
 * [13. Buenas Prácticas de Seguridad (Opcional)](#13-buenas-prácticas-de-seguridad-opcional)
+* [14. Runbook: MongoDB 8 no arranca por kernel HWE 7.0](#14-runbook-mongodb-8-no-arranca-por-kernel-hwe-70)
 * [FAQ: Preguntas Frecuentes](#faq-preguntas-frecuentes)
 * [Anexo A: Identificación de GPUs NVIDIA](#anexo-a-identificación-de-gpus-nvidia)
 * [Anexo B: Verificación de Compatibilidad](#anexo-b-verificación-de-compatibilidad)
@@ -75,6 +76,12 @@ Esta sección deja Ubuntu instalado y listo para la preparación inicial. Sigue 
 1. Entra a [https://ubuntu.com/download/desktop](https://ubuntu.com/download/desktop).
 2. Descarga la versión **Ubuntu Desktop LTS** indicada para tu instalación.
 3. Guarda el archivo `.iso` en un lugar fácil de encontrar, por ejemplo `Downloads`.
+
+> **Si el equipo va a correr MongoDB 8:** las ISO de Ubuntu Desktop 24.04.4 en adelante instalan
+> el kernel **HWE 7.0**, que impide arrancar `mongod` (ver [Sección 14](#14-runbook-mongodb-8-no-arranca-por-kernel-hwe-70)).
+> La ISO de Ubuntu **Server** instala el track GA por defecto y no tiene el problema. Si igual
+> instalas desde Desktop, aplica el pinning preventivo del [Paso 7 de la Sección 3](#paso-7-aplica-ajustes-según-tu-versión-de-ubuntu)
+> antes de instalar MongoDB.
 
 ### Paso 2: Crea la USB de instalación
 
@@ -340,6 +347,45 @@ rm libtinfo5_6.3-2ubuntu0.1_amd64.deb
 ```
 
 Si no sabes si lo necesitas, puedes dejarlo para más adelante. No bloquea la instalación del driver NVIDIA.
+
+Para **Ubuntu 24.04 LTS en equipos que van a correr MongoDB 8** (todas las estaciones de
+compresión y de analítica), fija el kernel en el track **GA 6.8** antes de instalar cualquier
+otro paquete. MongoDB 8 se niega a arrancar en kernels 6.19 – 7.0.13, que es lo que instala el
+HWE de las ISO 24.04.4 en adelante:
+
+```bash
+sudo tee /etc/apt/preferences.d/99-no-hwe-kernel >/dev/null <<'EOF'
+# MongoDB 8 vs kernel 6.19-7.0.13 (SERVER-121912): mantener track GA 6.8
+Package: linux-*hwe-24.04* linux-*hwe-7.* linux-image-7.* linux-modules-7.* linux-headers-7.* linux-tools-7.*
+Pin: release *
+Pin-Priority: -1
+EOF
+
+sudo tee /etc/apt/apt.conf.d/51-block-hwe-kernel >/dev/null <<'EOF'
+Unattended-Upgrade::Package-Blacklist {
+  "linux-generic-hwe-24.04";
+  "linux-image-generic-hwe-24.04";
+  "linux-headers-generic-hwe-24.04";
+};
+EOF
+
+sudo apt-mark hold linux-generic-hwe-24.04 linux-image-generic-hwe-24.04 \
+                    linux-headers-generic-hwe-24.04
+sudo apt update
+sudo apt install --install-recommends linux-generic
+```
+
+Verifica que el pin apuntó al blanco correcto y **no** arrastró al track GA:
+
+```bash
+uname -r                                   # 6.8.0-1XX-generic si ya estás en GA
+apt-cache policy linux-generic-hwe-24.04   # esperado: Candidate: (none), prioridad -1
+apt-cache policy linux-image-generic       # esperado: 500 / 6.8.0-1XX.XXX  ← NO debe ser -1
+```
+
+> **Si `uname -r` ya muestra `7.0.0-XX`**, el equipo nació con el HWE instalado y este pinning
+> solo evita que empeore: falta purgar el 7.0. No sigas con MongoDB; ve a la
+> [Sección 14, Caso A](#caso-a--equipo-ya-desplegado-corriendo-kernel-70).
 
 ### Paso 8: Verifica que la preparación quedó lista
 
@@ -676,6 +722,22 @@ El driver NVIDIA `.run` no se toca con esto.
 
 ### Instalación de MongoDB (Base de Datos NoSQL)
 
+#### Paso 0: Verifica que el kernel sea compatible
+
+MongoDB 8 **no arranca** en kernels Linux 6.19 – 7.0.13 (bug de TCMalloc/rseq,
+[SERVER-121912](https://jira.mongodb.org/browse/SERVER-121912)). Antes de instalar:
+
+```bash
+uname -r                        # esperado: 6.8.0-1XX-generic
+cat /proc/version_signature     # base upstream real, p.ej. "... 6.8.0-136.136"
+```
+
+- Si ves `6.8.0-1XX-generic`, sigue con el Paso 1. Si aún no aplicaste el pinning preventivo del
+  [Paso 7 de la Sección 3](#paso-7-aplica-ajustes-según-tu-versión-de-ubuntu), hazlo ahora — sin
+  él, un `apt upgrade` futuro reinstala el HWE y deja el equipo sin base de datos.
+- Si ves `7.0.0-XX-generic`, **no instales MongoDB todavía**: ve a la
+  [Sección 14](#14-runbook-mongodb-8-no-arranca-por-kernel-hwe-70) y vuelve acá al terminar.
+
 #### Paso 1: Agrega el Repositorio
 Importa la clave GPG:
 ```bash
@@ -705,6 +767,11 @@ sudo systemctl status mongod
 mongosh --eval "db.runCommand('ping')"
 # Debería mostrar "ok": 1
 ```
+
+> **Nota sobre Transparent Huge Pages:** MongoDB 8.0 requiere THP **habilitado**, al revés que
+> 7.0 y anteriores. Si algún script de provisión antiguo dejó `transparent_hugepage=never` en
+> `GRUB_CMDLINE_LINUX` o una unit de systemd que lo desactiva, quítalo. Verifica con
+> `cat /sys/kernel/mm/transparent_hugepage/enabled` (debería mostrar `[always]` o `[madvise]`).
 
 ### Instalación de MongoDB Compass (GUI para MongoDB)
 
@@ -905,6 +972,7 @@ netstat -tlnp | grep LISTEN  # Lista puertos abiertos
 
 ### Troubleshooting
 - **MongoDB no inicia:** Revisa logs: `sudo journalctl -u mongod`.
+- **MongoDB no inicia y el journal dice `MongoDB cannot start: Linux kernel versions 6.19 and newer has a known incompatibility`:** El equipo está corriendo el kernel HWE 7.0. Confirma con `uname -r` y aplica la [Sección 14](#14-runbook-mongodb-8-no-arranca-por-kernel-hwe-70). No sirve reinstalar `mongodb-org` ni tocar `/etc/mongod.conf`.
 - **EMQX falla:** Verifica puertos: `netstat -tlnp | grep 1883`.
 - **GStreamer plugins faltan:** `sudo apt install gstreamer1.0-plugins-*`.
 - **AnyDesk/RustDesk no conecta:** Desactiva firewall temporalmente para test.
@@ -1035,6 +1103,7 @@ sudo ufw status
 
 ### Troubleshooting
 - **MongoDB auth falla:** Verifica config en `/etc/mongod.conf`.
+- **`mongosh` no conecta porque `mongod` no arranca:** Si el journal muestra `MongoDB cannot start: Linux kernel versions 6.19 and newer...`, es el kernel HWE 7.0, no la config de auth. Aplica la [Sección 14](#14-runbook-mongodb-8-no-arranca-por-kernel-hwe-70).
 - **Node-RED no inicia:** Revisa logs: `sudo journalctl -u nodered`.
 - **Pip instala lento:** Usa mirror: `pip3 install --break-system-packages --index-url https://pypi.org/simple <lib>`.
 
@@ -1500,7 +1569,7 @@ En el resumen:
 - CUDA Toolkit (nvcc, PATH, LD_LIBRARY_PATH, configuración en sistema)
 
 #### Solo compresión (`doctor_compresion.sh`)
-- MongoDB y MongoDB Compass
+- MongoDB y MongoDB Compass, incluyendo kernel compatible con MongoDB 8 (falla si está en el rango 6.19 – 7.0.13, ver [Sección 14](#14-runbook-mongodb-8-no-arranca-por-kernel-hwe-70))
 - EMQX (broker MQTT)
 - Golang y Visual Studio Code
 - GStreamer y todos sus plugins (base, good, bad, ugly, libav, RTSP, NVIDIA, etc.)
@@ -1508,7 +1577,7 @@ En el resumen:
 - Puertos: 27017 (MongoDB), 1883 (MQTT), 18083 (EMQX Dashboard)
 
 #### Solo analítica (`doctor_analitica.sh`)
-- MongoDB con verificación de autorización
+- MongoDB con verificación de autorización y de kernel compatible con MongoDB 8 (falla si está en el rango 6.19 – 7.0.13, ver [Sección 14](#14-runbook-mongodb-8-no-arranca-por-kernel-hwe-70))
 - Node-RED, Node.js y npm
 - Python 3, pip3 y bibliotecas ML (pandas, numpy, scikit-learn, paho-mqtt, ultralytics)
 - Puertos: 27017 (MongoDB), 1880 (Node-RED)
@@ -1519,6 +1588,7 @@ En el resumen:
 - **Paquete Python no detectado:** El script usa `pip3 show` para verificar, que es más robusto que `import`. Si falla, verifica con `pip3 list | grep <paquete>`.
 - **NVIDIA módulo no detectado:** El script verifica vía `lsmod`, `/proc/driver/nvidia/version` y `nvidia-smi` como fallback. Si todo falla, revisa que el driver esté instalado correctamente.
 - **CUDA no detectado:** El script busca `nvcc` en `/usr/local/cuda*/bin/` y también verifica configuración en `~/.bashrc`, `/etc/profile.d/` y `/etc/environment`.
+- **"Kernel compatible con MongoDB 8" falla:** No tiene autofix; `--fix` no puede cambiar el kernel en ejecución. Aplica la [Sección 14](#14-runbook-mongodb-8-no-arranca-por-kernel-hwe-70) a mano y vuelve a correr el script.
 
 ---
 
@@ -1591,6 +1661,290 @@ Mantén sistema seguro.
 
 ---
 
+## 14. Runbook: MongoDB 8 no arranca por kernel HWE 7.0
+
+> **Aplica a:** Ubuntu 24.04 LTS (noble) con `mongodb-org` 8.0.x.
+> **Ticket upstream:** [SERVER-121912](https://jira.mongodb.org/browse/SERVER-121912).
+> **Estado:** mitigación vigente hasta que MongoDB libere el TCMalloc parcheado (ver *Criterio de salida*).
+> **Validado en:** `omnifish-SCMP`, 3 de Agosto de 2026.
+
+Esta sección es un runbook: se aplica solo cuando el síntoma aparece (Caso A) o cuando se está
+provisionando un equipo nuevo (Caso B). No es parte del flujo normal de instalación.
+
+### Causa raíz
+
+MongoDB 8.0+ empaqueta (vendoriza) una versión de TCMalloc que viola el ABI de **rseq**
+(*restartable sequences*) del kernel. A partir de Linux 6.19 esto provoca crashes.
+
+MongoDB agregó un guard explícito: **detecta kernels en el rango 6.19 – 7.0.13 y se niega a
+arrancar**. Kernel 7.0.14 o superior resuelve la incompatibilidad.
+
+El problema aparece en Ubuntu 24.04 porque Canonical rodó el stack **HWE de 26.04 (kernel 7.0)**
+hacia noble. Las ISO 24.04.4 en adelante lo instalan por defecto en escritorio.
+
+#### Detalle crítico para Ubuntu
+
+Ubuntu mantiene fijo el `X.Y.0-ABI` en `uname -r` y solo incrementa el número de ABI, aunque
+internamente suba el sublevel upstream. Es decir: **cuando Canonical rebase a 7.0.14+, `uname -r`
+seguirá reportando `7.0.0-XX`** y el guard de MongoDB seguirá bloqueando, incluso sobre un kernel
+ya corregido.
+
+**Conclusión operativa:** no esperes a que la próxima actualización HWE lo arregle. La salida es
+quedarse en el track **GA 6.8**, que recibe parches de seguridad de Canonical hasta el fin de vida
+de 24.04 y nunca salta de rama.
+
+### Diagnóstico
+
+```bash
+uname -r                        # p.ej. 7.0.0-28-generic
+cat /proc/version_signature     # base upstream REAL, p.ej. "... 7.0.12"
+systemctl status mongod
+journalctl -u mongod -b --no-pager | tail -30
+```
+
+Firma inequívoca del problema en el journal:
+
+```
+"s":"F","c":"CONTROL","id":12257600,"ctx":"main",
+"msg":"MongoDB cannot start: Linux kernel versions 6.19 and newer has a known incompatibility..."
+```
+
+`/proc/version_signature` distingue dos casos:
+
+| Base upstream | Situación |
+|---|---|
+| 6.19 – 7.0.13 | Incompatibilidad real. Aplica este runbook. |
+| ≥ 7.0.14 | Kernel ya corregido, pero el guard bloquea por el string de `uname`. Igual aplica este runbook. |
+
+### Caso A — Equipo ya desplegado corriendo kernel 7.0
+
+> **Orden obligatorio:** pinning → purge → verificar GRUB → reboot.
+> Invertirlo deja ventanas donde apt reinstala el HWE, o donde el equipo arranca en 7.0 sin supervisión.
+
+#### Paso 1: Pinning y bloqueo (primero, siempre)
+
+```bash
+sudo tee /etc/apt/preferences.d/99-no-hwe-kernel >/dev/null <<'EOF'
+# MongoDB 8 vs kernel 6.19-7.0.13 (SERVER-121912): mantener track GA 6.8
+Package: linux-*hwe-24.04* linux-*hwe-7.* linux-image-7.* linux-modules-7.* linux-headers-7.* linux-tools-7.*
+Pin: release *
+Pin-Priority: -1
+EOF
+
+sudo tee /etc/apt/apt.conf.d/51-block-hwe-kernel >/dev/null <<'EOF'
+Unattended-Upgrade::Package-Blacklist {
+  "linux-generic-hwe-24.04";
+  "linux-image-generic-hwe-24.04";
+  "linux-headers-generic-hwe-24.04";
+};
+EOF
+
+sudo apt update
+```
+
+Valida que el pinning apuntó al blanco correcto y **no** arrastró al track GA:
+
+```bash
+apt-cache policy linux-generic-hwe-24.04   # esperado: Candidate: (none), prioridad -1
+apt-cache policy linux-image-generic       # esperado: 500 / 6.8.0-1XX.XXX  ← NO debe ser -1
+```
+
+#### Paso 2: Asegura el track GA y quita los metapaquetes HWE
+
+```bash
+sudo apt install --install-recommends linux-generic
+sudo apt purge linux-generic-hwe-24.04 linux-image-generic-hwe-24.04 \
+                linux-headers-generic-hwe-24.04
+
+sudo apt-mark hold linux-generic-hwe-24.04 linux-image-generic-hwe-24.04 \
+                    linux-headers-generic-hwe-24.04
+```
+
+Los `apt-mark hold` sobre paquetes ya desinstalados sí funcionan: dejan la marca en dpkg y
+bloquean la reinstalación posterior.
+
+#### Paso 3: Arranca una vez en 6.8
+
+```bash
+sudo grub-reboot "Advanced options for Ubuntu>Ubuntu, with Linux 6.8.0-136-generic"
+sudo reboot
+```
+
+> **Cuidado:** `grub-reboot` es **de un solo uso** (escribe `next_entry` en grubenv). No es la
+> solución; es solo el puente para poder purgar el 7.0 sin tocar el kernel en ejecución. Ajusta
+> `6.8.0-136-generic` a la versión que tengas: mírala con `ls /boot/vmlinuz-6.8.0-*`.
+
+Tras el reboot:
+
+```bash
+uname -r                 # 6.8.0-1XX-generic
+systemctl status mongod  # active (running)
+dkms status              # módulos compilados para 6.8.0-1XX-generic
+```
+
+#### Paso 4: Purga el kernel 7.0
+
+**No uses globs a ciegas.** Un glob que no matchea nada hace que apt aborte la transacción
+completa sin remover nada, y el mensaje de error pasa fácilmente por alto:
+
+```
+E: Couldn't find any package by glob 'linux-modules-extra-7.0.0-28*'
+```
+
+Enumera primero lo que realmente está instalado:
+
+```bash
+dpkg -l | awk '/^ii/ && /7\.0\.0/ {print $2}'
+```
+
+Salida típica (6 paquetes):
+
+```
+linux-headers-7.0.0-28-generic
+linux-hwe-7.0-headers-7.0.0-28
+linux-hwe-7.0-tools-7.0.0-28
+linux-image-7.0.0-28-generic
+linux-modules-7.0.0-28-generic
+linux-tools-7.0.0-28-generic
+```
+
+Purga esa lista y **revisa el resumen de apt antes de confirmar**: debe contener solo esos
+paquetes. Si aparece algo con `6.8.0-1XX` o `nvidia-dkms-*`, cancela.
+
+```bash
+sudo apt purge $(dpkg -l | awk '/^ii/ && /7\.0\.0/ {print $2}')
+sudo apt autoremove --purge
+sudo update-grub
+```
+
+DKMS desmontará el módulo NVIDIA del 7.0 en el proceso. Es esperado.
+
+#### Paso 5: Verificación previa al reboot (gate)
+
+```bash
+sudo update-grub                                       # debe listar solo el 6.8
+ls /boot/vmlinuz-*                                     # una sola imagen
+sudo grub-editenv list                                 # next_entry= vacío
+dkms status                                            # solo 6.8.0-1XX-generic
+dpkg -l | awk '/^ii/ && /7\.0\.0/ {print $2}'          # sin salida
+sudo apt full-upgrade -s | grep -iE 'linux-|7\.0\.0'   # sin salida
+```
+
+`update-grub` no debe imprimir ninguna línea `Found linux image: /boot/vmlinuz-7.0.0-*`.
+
+> **Nota:** `grep 'vmlinuz-7.0.0' /boot/grub/grub.cfg` da *Permission denied* porque `grub.cfg` es
+> 0600 y el `sudo` no se propaga por el pipe. Usa la salida de `update-grub` o
+> `sudo grep ... /boot/grub/grub.cfg`.
+
+**Recién con todos estos checks en verde el equipo es seguro para reiniciar sin supervisión.**
+
+#### Paso 6: Limpia los overrides temporales de mongod
+
+Si durante la mitigación se agregó un drop-in con `GLIBC_TUNABLES`, revísalo:
+
+```bash
+sudo systemctl cat mongod
+```
+
+- Un override con `glibc.pthread.rseq=0` es **redundante**: el unit de origen ya lo trae. Peor aún,
+  cuando MongoDB cambie ese default al liberar el fix, el override lo pisará silenciosamente.
+  Elimínalo.
+- Un override con `glibc.pthread.rseq=1` era la mitigación de emergencia (hace que glibc gane el
+  registro de rseq y TCMalloc caiga a cachés per-thread). En kernel 6.8 **sobra** y degrada el
+  rendimiento al del allocator de MongoDB 7. Elimínalo.
+
+```bash
+sudo rm /etc/systemd/system/mongod.service.d/override.conf
+sudo rmdir /etc/systemd/system/mongod.service.d
+sudo systemctl daemon-reload && sudo systemctl restart mongod
+systemctl cat mongod | grep -c override.conf   # esperado: 0
+```
+
+**Regla general:** nunca edites `/usr/lib/systemd/system/mongod.service` directamente — cualquier
+upgrade de `mongodb-org-server` lo sobrescribe. Usa siempre `sudo systemctl edit mongod`.
+
+### Caso B — Provisión de equipos nuevos
+
+Mucho más corto, porque el 7.0 nunca llega a instalarse. Es el mismo pinning del
+[Paso 7 de la Sección 3](#paso-7-aplica-ajustes-según-tu-versión-de-ubuntu). En `late-commands` del
+autoinstall (o antes de sellar el golden image), **en este orden**:
+
+1. Escribe `/etc/apt/preferences.d/99-no-hwe-kernel` y `/etc/apt/apt.conf.d/51-block-hwe-kernel`
+   (contenido idéntico al Paso 1 del Caso A) — **antes de cualquier `apt install`**.
+2. `apt-mark hold linux-generic-hwe-24.04 linux-image-generic-hwe-24.04 linux-headers-generic-hwe-24.04`
+3. `apt install --install-recommends linux-generic`
+4. Instala `mongodb-org` (Sección 6).
+
+Sin paso de GRUB, sin purge, sin reboot intermedio.
+
+> El ISO de Ubuntu **Server** instala GA por defecto; el de **Desktop** instala HWE. Si despliegas
+> desde Desktop, cada equipo nace con el problema.
+
+### Preflight de Ansible para la flota
+
+Agrega esto como primera tarea de los plays de la flota, para que un equipo mal aprovisionado falle
+ruidosamente en consola en vez de romperse en silencio en terreno:
+
+```yaml
+- name: Kernel incompatible con MongoDB 8 (SERVER-121912)
+  ansible.builtin.assert:
+    that:
+      - ansible_kernel is version('6.19', '<')
+    fail_msg: >-
+      {{ inventory_hostname }} corre {{ ansible_kernel }}: el rango 6.19-7.0.13
+      bloquea el arranque de mongod. Aplicar el runbook (Caso A) antes de continuar.
+    success_msg: "Kernel {{ ansible_kernel }} OK para MongoDB 8"
+```
+
+En equipos sueltos, el mismo control lo hacen los scripts doctor de la
+[Sección 12](#12-scripts-doctor-de-verificación) con el check *Kernel compatible con MongoDB 8*.
+
+### Cabos sueltos
+
+- **THP:** MongoDB 8.0 requiere Transparent Huge Pages **habilitado** — al revés que 7.0 y
+  anteriores. Si algún script de provisión antiguo arrastra `transparent_hugepage=never` en
+  `GRUB_CMDLINE_LINUX` o una unit de systemd que lo desactiva, quítalo.
+- **`GRUB_DEFAULT` numérico:** no uses índices (`"1>2"`). Se desplazan con cada kernel instalado y
+  el equipo termina arrancando otra cosa semanas después. Con el 7.0 purgado, GRUB elige el 6.8 solo
+  y no hace falta fijar nada.
+- **dkms de terceros:** en `omnifish-SCMP` el paquete `dkms` viene del repo local de CUDA
+  (`dkms/unknown 1:3.2.1-1ubuntu2`) en vez del de noble. Mezclar versiones puede complicar la
+  recompilación de módulos NVIDIA en el próximo cambio de kernel. Si los módulos no recompilan, es
+  el primer sospechoso. Evalúa `apt install dkms=3.0.11-1ubuntu13` + hold, salvo que CUDA 13 lo
+  exija.
+
+### Criterio de salida (cuándo revertir esto)
+
+Este runbook es una mitigación, no un estado final. Revisa periódicamente
+[SERVER-121912](https://jira.mongodb.org/browse/SERVER-121912).
+
+Condiciones para volver a abrir el carril HWE:
+
+1. MongoDB publica una release con TCMalloc parcheado y lo confirma en las release notes /
+   production notes (hoy solo dicen que se resolverá "as soon as a patched version of TCMalloc is
+   available").
+2. Validar en **un** equipo de laboratorio: instalar el HWE, verificar `/proc/version_signature`,
+   confirmar que `mongod` arranca **y sigue vivo pasados varios minutos** (hubo un modo de falla con
+   SIGSEGV a los 30-60 s por Shadow Stacks / CET en CPUs Zen 5, distinto del bug de rseq).
+3. Recién entonces: quitar el pinning, los holds y la blacklist de unattended-upgrades, el check de
+   los scripts doctor, y actualizar esta sección.
+
+### Troubleshooting
+
+- **`apt purge` aborta con `Couldn't find any package by glob ...`:** No removió nada. Enumera con
+  el `dpkg -l | awk ...` del Paso 4 y purga la lista real.
+- **`apt-cache policy linux-image-generic` muestra `-1`:** El pin se pasó de ancho y bloqueó el
+  track GA. Revisa la línea `Package:` de `/etc/apt/preferences.d/99-no-hwe-kernel`.
+- **Tras el reboot el equipo volvió al 7.0:** `grub-reboot` es de un solo uso. Repite el Paso 3 y
+  no reinicies de nuevo hasta terminar los Pasos 4 y 5.
+- **Los módulos NVIDIA no recompilan en el 6.8:** `sudo dkms autoinstall && dkms status`. Si sigue
+  fallando, revisa la versión de `dkms` (ver *Cabos sueltos*) y reinstala el driver `.run` de la
+  [Sección 4](#4-instalación-de-drivers-de-nvidia-en-ubuntu).
+- **`mongod` arranca y muere a los 30-60 s con SIGSEGV:** No es este bug. Es Shadow Stacks / CET en
+  CPUs Zen 5, un modo de falla distinto.
+
+---
+
 ## FAQ: Preguntas Frecuentes
 
 * **¿Qué hago si el driver NVIDIA no se instala correctamente?**
@@ -1626,8 +1980,14 @@ Mantén sistema seguro.
 * **¿Qué hago si MongoDB o Node-RED no inician?**
   * Revisa logs: `sudo journalctl -u mongod` o `sudo journalctl -u nodered`. Verifica puertos con `sudo netstat -tlnp`.
 
+* **`mongod` no arranca y el log habla de "Linux kernel versions 6.19 and newer". ¿Qué pasa?**
+  * El equipo está en el kernel HWE 7.0 y MongoDB 8 se niega a arrancar en el rango 6.19 – 7.0.13 ([SERVER-121912](https://jira.mongodb.org/browse/SERVER-121912)). No es config de MongoDB: hay que volver al track GA 6.8. Sigue la [Sección 14](#14-runbook-mongodb-8-no-arranca-por-kernel-hwe-70).
+
 * **¿Cómo actualizo el kernel sin romper drivers?**
-  * Actualiza normalmente: `sudo apt update && sudo apt upgrade`. Si hay issues, reinstala drivers después.
+  * Actualiza normalmente: `sudo apt update && sudo apt upgrade`. Si hay issues, reinstala drivers después. **Excepción:** en equipos con MongoDB 8 no instales el kernel HWE (`linux-generic-hwe-24.04`); quédate en el track GA 6.8 con el pinning de la [Sección 14](#14-runbook-mongodb-8-no-arranca-por-kernel-hwe-70). El track GA sigue recibiendo parches de seguridad hasta el fin de vida de 24.04.
+
+* **¿Por qué `uname -r` muestra `7.0.0-XX` si Canonical ya publicó el kernel corregido?**
+  * Ubuntu mantiene fijo el `X.Y.0-ABI` en `uname -r` y solo sube el número de ABI, aunque internamente rebase el sublevel upstream. El guard de MongoDB lee ese string, así que seguirá bloqueando incluso sobre un kernel ya parcheado. Revisa la base real con `cat /proc/version_signature`.
 
 * **¿Es seguro usar el script post-install?**
   * Revisa el código antes de ejecutar. Hace backups y configura según la guía, pero úsalo con precaución en producción.
