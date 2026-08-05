@@ -227,6 +227,100 @@ check_manual() {
 }
 
 # =============================================================================
+# --- Verificación de paquetes dpkg ---
+# =============================================================================
+
+# apt-mark hold cambia el estado en "dpkg -l" de "ii" a "hi" (primer carácter =
+# acción deseada, segundo = estado real), así que grep '^ii' da falso negativo
+# sobre paquetes en hold — por ejemplo dkms fijado al de noble para no tomar el
+# del repo local de CUDA (Sección 14, cabos sueltos).
+# Además "dpkg -l | grep -q" falla con set -o pipefail: grep -q corta el pipe,
+# dpkg muere con SIGPIPE (141) y la condición evalúa falso aunque el paquete
+# exista. dpkg-query evita las dos trampas. Acepta globs.
+pkg_installed() {
+    local out
+    out=$(dpkg-query -W -f='${db:Status-Status}\n' "$1" 2>/dev/null || true)
+    [[ "$out" == *installed* ]]
+}
+
+# NOTA para futuros checks: si el valor de retorno de una función es un pipeline
+# que termina en `grep -q`, con `set -o pipefail` puede dar falso. Capturá la
+# salida en una variable y compará con `[[ "$out" == *patrón* ]]`.
+
+# =============================================================================
+# --- Verificaciones que el manual exige y no estaban cubiertas ---
+# =============================================================================
+
+# Rama del driver fijada por la Sección 4 / Anexo B
+NVIDIA_BRANCH_EXPECTED="580"
+
+check_nvidia_branch() {
+    local v
+    v=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1)
+    [ -n "$v" ] || return 1
+    [ "${v%%.*}" = "$NVIDIA_BRANCH_EXPECTED" ]
+}
+
+# El módulo debe venir del .run, no de APT (Secciones 3 y 4). Un equipo con
+# nvidia-driver-* de APT pasaba todos los checks NVIDIA aunque el manual lo
+# trate como error a purgar.
+check_nvidia_not_from_apt() {
+    local out
+    out=$(dpkg-query -W -f='${db:Status-Status} ${Package}\n' \
+              'nvidia-*' 'libnvidia-*' 'cuda-drivers*' 2>/dev/null || true)
+    [[ "$out" != *installed* ]]
+}
+
+# Módulo open/MIT-GPL, recomendado por la Sección 4 Paso 5 para RTX 20/30/40/50
+check_nvidia_open_module() {
+    local out
+    out=$(modinfo nvidia 2>/dev/null || true)
+    [[ "$out" == *"Dual MIT/GPL"* ]]
+}
+
+# Versión de CUDA fijada por la Sección 5
+CUDA_VERSION_EXPECTED="13.0"
+
+check_cuda_version() {
+    local v
+    v=$(nvcc --version 2>/dev/null | grep -oE 'release [0-9]+\.[0-9]+' | head -1 | awk '{print $2}')
+    [ "$v" = "$CUDA_VERSION_EXPECTED" ]
+}
+
+# Pin del kernel GA persistente (Sección 3 Paso 7 / Sección 14). Verificar solo
+# "uname -r" no alcanza: un equipo en 6.8 sin pin vuelve al HWE en el próximo
+# apt upgrade y se queda sin base de datos.
+check_kernel_pin() {
+    [ -f /etc/apt/preferences.d/99-no-hwe-kernel ] || return 1
+    [ -f /etc/apt/apt.conf.d/51-block-hwe-kernel ] || return 1
+    local out
+    out=$(apt-cache policy linux-generic-hwe-24.04 2>/dev/null || true)
+    [[ "$out" == *"Candidate: (none)"* ]]
+}
+
+# MongoDB 8.0 requiere THP habilitado, al revés que 7.0 y anteriores
+check_thp_enabled() {
+    local f=/sys/kernel/mm/transparent_hugepage/enabled
+    [ -f "$f" ] || return 0
+    ! grep -q '\[never\]' "$f"
+}
+
+# Headers del kernel en ejecución: sin ellos DKMS no recompila el módulo NVIDIA
+# en el próximo cambio de kernel (Sección 3 Paso 4).
+check_running_kernel_headers() {
+    pkg_installed "linux-headers-$(uname -r)"
+}
+
+# Override de systemd de AnyDesk (Sección 6 Paso 2). El manual lo declara
+# obligatorio en estaciones de compresión: sin él AnyDesk crashea y congela
+# GNOME con gnome-shell al 70-100% de CPU.
+check_anydesk_override() {
+    local out
+    out=$(systemctl cat anydesk 2>/dev/null || true)
+    [[ "$out" == *LIBGL_ALWAYS_SOFTWARE* ]]
+}
+
+# =============================================================================
 # --- Detección de CUDA desde filesystem ---
 # =============================================================================
 
@@ -350,7 +444,10 @@ check_pip_package() {
 
 # Instalar paquete(s) apt
 fix_apt() {
-    sudo apt-get install -y "$@"
+    # --no-upgrade: instalar lo ausente sin tocar lo presente. Sin esto, un
+    # paquete en hold (dkms) hace abortar todo con
+    # "Held packages were changed and -y was used".
+    sudo apt-get install -y --no-upgrade "$@"
 }
 
 # Instalar paquete snap
@@ -405,7 +502,24 @@ fix_anydesk_repo_and_install() {
     sudo chmod a+r /etc/apt/keyrings/keys.anydesk.com.asc
     echo "deb [signed-by=/etc/apt/keyrings/keys.anydesk.com.asc] https://deb.anydesk.com all main" | sudo tee /etc/apt/sources.list.d/anydesk-stable.list > /dev/null
     sudo apt-get update && sudo apt-get install -y anydesk
+    # Sin el override AnyDesk crashea y congela GNOME (Sección 6 Paso 2).
+    fix_anydesk_override
 }
+# --- Override de AnyDesk para NVIDIA/X11 (Sección 6 Paso 2) ---
+fix_anydesk_override() {
+    sudo mkdir -p /etc/systemd/system/anydesk.service.d
+    sudo tee /etc/systemd/system/anydesk.service.d/override.conf > /dev/null << 'EOFOVERRIDE'
+[Service]
+Environment=DISPLAY=:0
+Environment=XAUTHORITY=/run/user/1000/gdm/Xauthority
+Environment=LIBGL_ALWAYS_SOFTWARE=1
+ExecStartPre=/bin/sleep 5
+EOFOVERRIDE
+    sudo systemctl daemon-reload
+    sudo systemctl enable anydesk
+    sudo systemctl restart anydesk
+}
+
 
 # --- Node-RED ---
 fix_nodered() {

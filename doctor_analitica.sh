@@ -45,11 +45,14 @@ check_and_fix "Arquitectura x86_64" "uname -m | grep -q x86_64"
 section "2. Preparación del Sistema"
 
 check_and_fix "build-essential instalado" \
-    "dpkg -l build-essential 2>/dev/null | grep -q '^ii'" \
+    "pkg_installed build-essential" \
     "fix_apt build-essential"
 check_and_fix "dkms instalado" \
-    "dpkg -l dkms 2>/dev/null | grep -q '^ii'" \
+    "pkg_installed dkms" \
     "fix_apt dkms"
+check_and_fix "Headers del kernel en ejecución" \
+    "check_running_kernel_headers" \
+    "fix_apt linux-headers-$(uname -r) linux-headers-generic"
 check_and_fix "pkg-config instalado" \
     "command -v pkg-config" \
     "fix_apt pkg-config"
@@ -76,34 +79,34 @@ check_and_fix "neofetch instalado" "command -v neofetch" "fix_neofetch"
 check_and_fix "mesa-utils instalado" "command -v glxinfo" "fix_apt mesa-utils"
 
 check_and_fix "Librerías OpenGL (libglvnd-dev)" \
-    "dpkg -l libglvnd-dev 2>/dev/null | grep -q '^ii'" \
+    "pkg_installed libglvnd-dev" \
     "fix_apt libglvnd-dev"
 check_and_fix "Librerías Mesa (libgl1-mesa-dev)" \
-    "dpkg -l libgl1-mesa-dev 2>/dev/null | grep -q '^ii'" \
+    "pkg_installed libgl1-mesa-dev" \
     "fix_apt libgl1-mesa-dev"
 check_and_fix "Librerías EGL (libegl1-mesa-dev)" \
-    "dpkg -l libegl1-mesa-dev 2>/dev/null | grep -q '^ii'" \
+    "pkg_installed libegl1-mesa-dev" \
     "fix_apt libegl1-mesa-dev"
 check_and_fix "Librerías GLES (libgles2-mesa-dev)" \
-    "dpkg -l libgles2-mesa-dev 2>/dev/null | grep -q '^ii'" \
+    "pkg_installed libgles2-mesa-dev" \
     "fix_apt libgles2-mesa-dev"
 check_and_fix "Librerías X11 (libx11-dev)" \
-    "dpkg -l libx11-dev 2>/dev/null | grep -q '^ii'" \
+    "pkg_installed libx11-dev" \
     "fix_apt libx11-dev"
 check_and_fix "Librerías Xmu (libxmu-dev)" \
-    "dpkg -l libxmu-dev 2>/dev/null | grep -q '^ii'" \
+    "pkg_installed libxmu-dev" \
     "fix_apt libxmu-dev"
 check_and_fix "Librerías Xi (libxi-dev)" \
-    "dpkg -l libxi-dev 2>/dev/null | grep -q '^ii'" \
+    "pkg_installed libxi-dev" \
     "fix_apt libxi-dev"
 check_and_fix "Librerías GLU (libglu1-mesa-dev)" \
-    "dpkg -l libglu1-mesa-dev 2>/dev/null | grep -q '^ii'" \
+    "pkg_installed libglu1-mesa-dev" \
     "fix_apt libglu1-mesa-dev"
 check_and_fix "Librerías GStreamer dev" \
-    "dpkg -l libgstreamer1.0-dev 2>/dev/null | grep -q '^ii'" \
+    "pkg_installed libgstreamer1.0-dev" \
     "fix_apt libgstreamer1.0-dev"
 check_and_fix "Librerías GStreamer plugins base dev" \
-    "dpkg -l libgstreamer-plugins-base1.0-dev 2>/dev/null | grep -q '^ii'" \
+    "pkg_installed libgstreamer-plugins-base1.0-dev" \
     "fix_apt libgstreamer-plugins-base1.0-dev"
 
 # --- 3. Wayland/Xorg ---
@@ -131,7 +134,7 @@ info "Target actual: ${target}"
 section "4. SSH y Firewall"
 
 check_and_fix "OpenSSH Server instalado" \
-    "dpkg -l openssh-server 2>/dev/null | grep -q '^ii'" \
+    "pkg_installed openssh-server" \
     "fix_apt openssh-server"
 check_and_fix_warn "Servicio SSH activo" "systemctl is-active ssh"
 check_and_fix_warn "UFW instalado" "command -v ufw" "fix_apt ufw"
@@ -173,6 +176,16 @@ fi
 check_and_fix "Módulo NVIDIA cargado en kernel" "check_nvidia_kernel_module"
 check_and_fix "GPU NVIDIA detectada" "check_nvidia_gpu"
 
+# El manual fija la rama 580.x.x e instala por .run, nunca por APT (Secciones 3 y 4)
+check_manual "Driver en la rama ${NVIDIA_BRANCH_EXPECTED}.x.x (fijada por el manual)" \
+    "check_nvidia_branch" \
+    "El manual fija la familia ${NVIDIA_BRANCH_EXPECTED}. Revisa la Sección 4 y el Anexo B antes de cambiar de rama."
+check_manual "Driver instalado por .run y no por APT" \
+    "check_nvidia_not_from_apt" \
+    "Hay paquetes nvidia-* de APT instalados. La Sección 4 los trata como error: purga con 'sudo apt purge ^nvidia-.* ^libnvidia-.* ^cuda-drivers.*' y reinstala por .run."
+check_and_fix_warn "Módulo open/MIT-GPL (recomendado para RTX 20/30/40/50)" \
+    "check_nvidia_open_module"
+
 # --- 6. CUDA Toolkit (Sección 5) ---
 section "6. CUDA Toolkit"
 
@@ -191,6 +204,9 @@ fi
 check_and_fix "PATH incluye CUDA" "echo \"\$PATH\" | grep -qi cuda"
 check_and_fix "LD_LIBRARY_PATH incluye CUDA" "echo \"\${LD_LIBRARY_PATH:-}\" | grep -qi cuda"
 check_and_fix "Configuración CUDA en el sistema" "check_cuda_configured"
+check_manual "CUDA Toolkit en la versión fijada (${CUDA_VERSION_EXPECTED})" \
+    "check_cuda_version" \
+    "La Sección 5 fija CUDA ${CUDA_VERSION_EXPECTED} con el instalador .deb local. Instala solo cuda-toolkit, nunca los metapaquetes cuda ni cuda-drivers."
 
 # --- 7. MongoDB (Sección 7) ---
 section "7. MongoDB"
@@ -198,6 +214,11 @@ section "7. MongoDB"
 check_manual "Kernel compatible con MongoDB 8 (fuera de 6.19-7.0.13)" \
     "check_kernel_mongodb_ok" \
     "Kernel $(uname -r) bloquea el arranque de mongod (SERVER-121912). Aplica la Sección 14 del README: volver al track GA 6.8."
+check_manual "Pin del kernel GA persistente" \
+    "check_kernel_pin" \
+    "Falta el pin del track GA. Sin él un apt upgrade futuro reinstala el HWE y deja el equipo sin base de datos. Aplica el Paso 7 de la Sección 3."
+check_and_fix_warn "Transparent Huge Pages habilitado (MongoDB 8 lo requiere)" \
+    "check_thp_enabled"
 
 check_and_fix "MongoDB instalado (mongod)" \
     "command -v mongod" \
@@ -340,7 +361,7 @@ section "11. Dependencias Específicas por Versión"
 
 if [[ "$ubuntu_version" == "24.04"* ]]; then
     check_and_fix_warn "libtinfo5 instalado (requerido en 24.04)" \
-        "dpkg -l libtinfo5 2>/dev/null | grep -q '^ii'" \
+        "pkg_installed libtinfo5" \
         "fix_libtinfo5"
 elif [[ "$ubuntu_version" == "22.04"* ]]; then
     check_and_fix "GCC-12 instalado" "gcc-12 --version" "fix_gcc12"

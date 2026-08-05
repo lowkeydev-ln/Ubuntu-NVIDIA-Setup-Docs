@@ -176,3 +176,4 @@ cython_debug/
 # Local Claude Code / Codex config
 .claude/
 .codex
+.vscode/

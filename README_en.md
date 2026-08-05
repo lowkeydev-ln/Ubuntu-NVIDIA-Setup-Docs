@@ -1517,8 +1517,14 @@ In the summary:
 - Quality-of-life tools (git, curl, wget, vim, htop, ncdu, nmap, etc.)
 - Graphical environment (Xorg vs Wayland)
 - SSH and firewall
+- Development dependencies: headers for the running kernel, required for DKMS to rebuild the NVIDIA module
 - NVIDIA drivers (nvidia-smi, kernel modules, GPU detection)
+- Driver on the branch pinned by this manual (580.x.x) and installed via `.run`, **not** APT. A machine with `nvidia-driver-*` from APT used to pass every NVIDIA check even though Section 4 treats it as an error to purge
+- Open/MIT-GPL kernel module, recommended by Section 4 Step 5 for RTX 20/30/40/50
 - CUDA Toolkit (nvcc, PATH, LD_LIBRARY_PATH, system configuration)
+- CUDA on the version pinned by Section 5 (13.0)
+- Persistent GA kernel pin. Checking `uname -r` alone is not enough: a machine on 6.8 today but without the pin returns to HWE on the next `apt upgrade` and ends up with no database
+- Transparent Huge Pages enabled, which MongoDB 8.0 requires
 
 #### Compression only (`doctor_compresion.sh`)
 - MongoDB and MongoDB Compass, including MongoDB 8 kernel compatibility (fails if in the 6.19 – 7.0.13 range, see [Section 14](#14-runbook-mongodb-8-fails-to-start-on-hwe-kernel-70))
@@ -1526,6 +1532,7 @@ In the summary:
 - Golang and Visual Studio Code
 - GStreamer and all plugins (base, good, bad, ugly, libav, RTSP, NVIDIA, etc.)
 - Remote tools (Angry IP Scanner, AnyDesk, RustDesk)
+- AnyDesk systemd override, which Section 6 Step 2 declares mandatory. Without it AnyDesk crashes and freezes GNOME, and a merely-installed package does not reveal that
 - Ports: 27017 (MongoDB), 1883 (MQTT), 18083 (EMQX Dashboard)
 
 #### Analytics only (`doctor_analitica.sh`)
@@ -1541,6 +1548,11 @@ In the summary:
 - **NVIDIA module not detected:** The script checks through `lsmod`, `/proc/driver/nvidia/version`, and `nvidia-smi` as fallback. If all fail, verify that the driver is installed correctly.
 - **CUDA not detected:** The script searches for `nvcc` in `/usr/local/cuda*/bin/` and also checks configuration in `~/.bashrc`, `/etc/profile.d/`, and `/etc/environment`.
 - **"Kernel compatible con MongoDB 8" fails:** There is no autofix; `--fix` cannot change the running kernel. Apply [Section 14](#14-runbook-mongodb-8-fails-to-start-on-hwe-kernel-70) manually and re-run the script.
+- **"Driver instalado por .run y no por APT" fails:** There are `nvidia-*` packages from APT. Deliberately no autofix: purging the active driver requires text mode. Apply steps 3 through 6 of [Section 4](#4-installing-nvidia-drivers-on-ubuntu).
+- **"Pin del kernel GA persistente" fails:** `/etc/apt/preferences.d/99-no-hwe-kernel` or `/etc/apt/apt.conf.d/51-block-hwe-kernel` is missing, or the pin did not leave `Candidate: (none)`. Apply [Step 7 of Section 3](#step-7-apply-adjustments-for-your-ubuntu-version). This check can be green on `uname -r` and red here: it means the machine is fine today and broken on the next `apt upgrade`.
+- **"Driver en la rama 580.x.x" fails:** The manual pins that family. Switch branches only for a concrete reason: new GPU, critical bug fixed, or internal validation. See [Annex B](#annex-b-compatibility-verification).
+- **"AnyDesk con override X11" fails:** `--fix` applies it by writing the override and restarting the service. Installing AnyDesk from scratch also applies it now.
+- **An installed package reads as absent:** If it is on `hold`, `dpkg -l` shows `hi` rather than `ii`. The scripts use `pkg_installed`, which queries `dpkg-query` and is not fooled; if you write your own check, do not use `grep '^ii'`.
 
 ---
 
@@ -1705,13 +1717,28 @@ apt-cache policy linux-image-generic       # expected: 500 / 6.8.0-1XX.XXX  <- m
 sudo apt install --install-recommends linux-generic
 sudo apt purge linux-generic-hwe-24.04 linux-image-generic-hwe-24.04 \
                 linux-headers-generic-hwe-24.04
-
-sudo apt-mark hold linux-generic-hwe-24.04 linux-image-generic-hwe-24.04 \
-                    linux-headers-generic-hwe-24.04
 ```
 
-`apt-mark hold` on already-uninstalled packages does work: it leaves the mark in dpkg and blocks
-later reinstallation.
+`apt install linux-generic` goes **before** the purge, so the GA metapackage owns the 6.8 image and
+no later `autoremove` can orphan it.
+
+> **Do not try `apt-mark hold` on those three after the purge.** It fails:
+>
+> ```
+> E: Can't select installed nor candidate version from package 'linux-generic-hwe-24.04' as it has neither of them
+> ```
+>
+> This is structural, not an implementation quirk: the dpkg selection is a **single field** holding
+> `install` / `hold` / `deinstall` / `purge`. A purged package cannot also be held, because it is
+> the same slot. And with the pin already in place there is no candidate version for `apt-mark` to
+> select either.
+>
+> The real protection is the Step 1 pin, which is **stronger** than a hold: it leaves
+> `Candidate: (none)`, meaning apt cannot install them even if asked. Verify with
+> `apt-cache policy linux-generic-hwe-24.04`.
+>
+> A `hold` is the right tool for packages that remain installed and that you want frozen at their
+> current version — `dkms`, for instance, see *Loose ends*.
 
 #### Step 3: Boot into 6.8 once
 
@@ -1776,11 +1803,24 @@ sudo update-grub                                       # must list only 6.8
 ls /boot/vmlinuz-*                                     # a single image
 sudo grub-editenv list                                 # next_entry= empty
 dkms status                                            # only 6.8.0-1XX-generic
-dpkg -l | awk '/^ii/ && /7\.0\.0/ {print $2}'          # no output
-sudo apt full-upgrade -s | grep -iE 'linux-|7\.0\.0'   # no output
+dpkg -l | awk '/^(i|h)i/ && /7\.0\.0/ {print $2}'      # no output
+sudo apt full-upgrade -s \
+  | grep -E '^Inst (linux-image|linux-modules|linux-headers|linux-generic|linux-hwe)' \
+  || echo "no kernel changes"
 ```
 
 `update-grub` must not print any `Found linux image: /boot/vmlinuz-7.0.0-*` line.
+
+> **Two pattern details, both hit in the field:**
+>
+> The last check must **not** use `grep -iE 'linux-|7\.0\.0'`: that pattern matches `linux-base`,
+> `linux-firmware` and `linux-libc-dev`, which are ordinary packages, not kernels. It false-positives
+> and stops a machine that is actually fine. The pattern above only looks at `Inst` lines for kernel
+> packages.
+>
+> The second-to-last uses `^(i|h)i` rather than `^ii` because **`apt-mark hold` changes the
+> `dpkg -l` state from `ii` to `hi`** (first character is the desired action, second is the actual
+> state). With `^ii`, a package that is installed but held reads as absent.
 
 > **Note:** `grep 'vmlinuz-7.0.0' /boot/grub/grub.cfg` gives *Permission denied* because `grub.cfg`
 > is 0600 and `sudo` does not propagate through the pipe. Use the `update-grub` output or
