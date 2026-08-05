@@ -240,7 +240,11 @@ check_manual() {
 pkg_installed() {
     local out
     out=$(dpkg-query -W -f='${db:Status-Status}\n' "$1" 2>/dev/null || true)
-    [[ "$out" == *installed* ]]
+    # Match de LINEA COMPLETA. dpkg-query tambien devuelve entradas
+    # "not-installed" y "config-files", y "not-installed" contiene
+    # "installed" como substring: comparar con *installed* da falso
+    # positivo. Here-string, no pipeline, asi que pipefail no interfiere.
+    grep -qx 'installed' <<<"$out"
 }
 
 # NOTA para futuros checks: si el valor de retorno de una función es un pipeline
@@ -265,10 +269,13 @@ check_nvidia_branch() {
 # nvidia-driver-* de APT pasaba todos los checks NVIDIA aunque el manual lo
 # trate como error a purgar.
 check_nvidia_not_from_apt() {
-    local out
-    out=$(dpkg-query -W -f='${db:Status-Status} ${Package}\n' \
-              'nvidia-*' 'libnvidia-*' 'cuda-drivers*' 2>/dev/null || true)
-    [[ "$out" != *installed* ]]
+    local p
+    for p in 'nvidia-*' 'libnvidia-*' 'cuda-drivers*'; do
+        if pkg_installed "$p"; then
+            return 1
+        fi
+    done
+    return 0
 }
 
 # Módulo open/MIT-GPL, recomendado por la Sección 4 Paso 5 para RTX 20/30/40/50
