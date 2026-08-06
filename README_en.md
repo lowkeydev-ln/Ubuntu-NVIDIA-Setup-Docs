@@ -1142,6 +1142,17 @@ systemctl get-default  # graphical.target
 
 > **Note:** Network problems with new motherboards are usually due to incompatible drivers. Use `lspci | grep Network` to identify the chip. Restart after changes.
 
+> **⚠️ Before installing the HWE kernel to fix a NIC:** on any station running MongoDB 8 — that is,
+> every compression and analytics station — that path is **closed**. The 24.04 HWE kernel pulls in
+> the 7.0 series, which prevents `mongod` from starting
+> ([SERVER-121912](https://jira.mongodb.org/browse/SERVER-121912)), and the pin from
+> [Section 3 Step 7](#step-7-apply-adjustments-for-your-ubuntu-version) leaves it with no candidate:
+> the `apt install` will fail with `has no installation candidate`.
+>
+> What you need is a newer **driver**, not a newer kernel. The full procedure, in the order that
+> keeps you from losing network halfway through, is in
+> [Case C of Section 14](#case-c--boards-whose-nic-does-not-work-on-the-ga-kernel).
+
 ### Problems with Realtek RTL8125 (Ethernet)
 
 #### Diagnosis
@@ -1151,12 +1162,30 @@ lspci | grep RTL8125  # Confirm chip
 ```
 
 #### Solution
-1. Update system: `sudo apt update && sudo apt full-upgrade -y`
-2. Add PPA: `sudo add-apt-repository ppa:kelebek333/rtl-kernel -y && sudo apt update`
-3. Install driver: `sudo apt install r8125-dkms -y`
-4. Block old one: `echo 'blacklist r8169' | sudo tee /etc/modprobe.d/blacklist-r8169.conf`
-5. Update initramfs: `sudo update-initramfs -u`
-6. Restart: `sudo reboot`
+
+Ubuntu 24.04 ships `r8125-dkms` **in its own repositories**; no third-party PPA needed:
+
+```bash
+sudo apt update
+sudo apt install -y dkms build-essential linux-headers-generic
+sudo apt install -y r8125-dkms        # for RTL8168/8111 use r8168-dkms
+```
+
+Only if the chip still won't come up, blacklist the in-tree driver and rebuild the initramfs:
+
+```bash
+echo 'blacklist r8169' | sudo tee /etc/modprobe.d/blacklist-r8169.conf
+sudo update-initramfs -u
+sudo reboot
+```
+
+> **Try without blacklisting first.** The kernel's `r8169` absorbed RTL8125 support several versions
+> ago and works on its own on many boards. Check with
+> `basename $(readlink -f /sys/class/net/<iface>/device/driver)`: if it says `r8169` and the
+> interface is UP, leave it alone.
+
+Being DKMS, the module is rebuilt on every kernel change, so this path is compatible with the GA
+track pin that MongoDB 8 requires.
 
 **Verification:** `ip link show` (should be UP), `lspci | grep -i ethernet`
 
@@ -1172,18 +1201,34 @@ ip link show                          # UP/DOWN state of the interface
 Intel I219 chips use the `e1000e` driver, while I225/I226 use `igc`. Both ship with the Ubuntu kernel; the issue is almost always an outdated kernel or missing firmware.
 
 #### Solution
+
 1. Update the system and firmware:
    ```bash
    sudo apt update && sudo apt full-upgrade -y
    sudo apt install -y linux-firmware
    ```
-2. Install the HWE kernel (recommended for new boards with I225/I226):
+2. Check whether the driver in the kernel you intend to run knows your board. Take the PCI ID from
+   `lspci -nn` — for example `8086:125c` — and ask the module:
+   ```bash
+   lspci -nn | grep -Ei 'ethernet'
+   modinfo igc | grep -i 'pci:v00008086d0000125C'   # adjust the ID to your board
+   ```
+   If the alias shows up, the driver supports the chip and the problem is elsewhere: firmware, BIOS,
+   or point 4.
+3. If the alias does **not** show up, that kernel's driver is too old for the board.
+
+   > **Do not install `linux-generic-hwe-24.04` if the station runs MongoDB 8.** That is the 7.0
+   > series kernel that prevents `mongod` from starting. Follow
+   > [Case C of Section 14](#case-c--boards-whose-nic-does-not-work-on-the-ga-kernel), which fixes the
+   > NIC without switching kernel tracks.
+
+   On a machine that will **not** run MongoDB, HWE is still valid:
    ```bash
    sudo apt install -y --install-recommends linux-generic-hwe-24.04
    ```
    For Ubuntu 22.04 use `linux-generic-hwe-22.04`.
-3. Reboot: `sudo reboot`
-4. If the chip still won't come up and `dmesg` shows `igc` errors, try disabling TSO/GSO temporarily:
+4. If the chip comes up but the link is unstable and `dmesg` shows `igc` errors, try disabling
+   TSO/GSO temporarily:
    ```bash
    sudo ethtool -K enpXsY tso off gso off gro off
    ```
@@ -1869,6 +1914,126 @@ No GRUB step, no purge, no intermediate reboot.
 
 > The Ubuntu **Server** ISO installs GA by default; the **Desktop** one installs HWE. If you deploy
 > from Desktop, every machine is born with the problem.
+
+### Case C — Boards whose NIC does not work on the GA kernel
+
+Shows up with new motherboards: the Ethernet port comes up on the HWE kernel and dies when you drop
+to GA 6.8. The obvious way out — installing `linux-generic-hwe-24.04`, as
+[Section 9](#9-common-network-issues-with-new-motherboards) suggests — is **closed on every station
+running MongoDB 8**, meaning every compression and analytics box.
+
+What you need is not a newer kernel: it is a newer **driver**. HWE is a shortcut to get one, not the
+only path.
+
+> **Golden rule: you need network to fix the network.** If you pin to GA, reboot, and the NIC does
+> not come up, you are stuck on a machine with no network that cannot download the driver that would
+> fix it. The ordering in this section exists so that does not happen.
+
+#### Step 1: Identify the chip and its PCI ID, while you still have network
+
+```bash
+lspci -nn | grep -Ei 'ethernet|network'
+```
+
+Note the bracketed `vendor:device` ID — for example `10ec:8125` (Realtek RTL8125) or `8086:125c`
+(Intel I226-V). Also the driver in use:
+
+```bash
+for i in /sys/class/net/e*; do
+  n=$(basename "$i")
+  echo "$n -> $(basename "$(readlink -f "$i/device/driver")" 2>/dev/null)"
+done
+```
+
+#### Step 2: Install the GA kernel without rebooting
+
+Apply the pin from Case A Step 1, then:
+
+```bash
+sudo apt install --install-recommends linux-generic
+```
+
+This brings in `linux-modules-6.8.0-1XX-generic`, which is where `igc`, `e1000e`, `igb` and `r8169`
+live. They are not in `linux-modules-extra`: any normally installed kernel has them.
+
+#### Step 3: Ask the GA driver whether it knows your board
+
+Still without rebooting. This is the check that decides the path:
+
+```bash
+GA=$(ls /lib/modules | grep '^6\.8\.' | sort -V | tail -1)
+DRV=igc                  # or e1000e, igb, r8169 per Step 1
+ID=8086:125c             # the PCI ID from Step 1
+
+ALIAS="pci:v0000$(echo "${ID%:*}" | tr 'a-f' 'A-F')d0000$(echo "${ID#*:}" | tr 'a-f' 'A-F')"
+modinfo -k "$GA" "$DRV" | grep -qi "$ALIAS" \
+  && echo "OK: the GA $GA driver knows $ID" \
+  || echo "MISSING: the GA $GA driver does not declare $ID"
+```
+
+`modinfo -k` queries **another** kernel's module, so it works before booting it. It requires that
+kernel's `linux-modules-*` to be installed, which is what Step 2 did.
+
+| Result | Path |
+|---|---|
+| **OK** | GA supports the board. Continue with normal Case A from Step 3 (boot into 6.8) |
+| **MISSING** | Go to Step 4 of this section **before** rebooting |
+
+> A `MISSING` does not always mean it will not work: some drivers match by class or wildcard. But if
+> the NIC already died once on GA, `MISSING` confirms it.
+
+#### Step 4: Bring the driver in via DKMS, with the network still alive
+
+DKMS is the right answer because it **rebuilds the module on every kernel change**, so it survives GA
+series updates. Confirmed: `/etc/kernel/postinst.d/dkms` triggers on kernel install, and one module
+ends up built for every kernel present.
+
+For Realtek 2.5GbE, noble ships it in its own repositories — **the third-party PPA mentioned in
+Section 9 is not needed**:
+
+```bash
+sudo apt install -y dkms build-essential linux-headers-generic
+sudo apt install -y r8125-dkms      # RTL8125. For RTL8168/8111: r8168-dkms
+```
+
+For Intel `igc` (I225/I226) there is no DKMS package in the repositories: you have to build from the
+source Intel publishes in its Download Center and wrap it in DKMS so it survives kernel changes. More
+work, which is why the two hardware alternatives often win on time:
+
+- **Intel I210 or I350 PCIe NIC.** Solid on GA 6.8, no DKMS to maintain. Cheapest option measured in
+  operator hours.
+- **USB Ethernet adapter.** Immediate. Verify it supports Wake-on-LAN if that station needs it, since
+  many do not.
+
+If there is no network at all to download the DKMS package, use USB tethering from a phone or carry
+the `.deb` and its dependencies on a flash drive.
+
+#### Step 5: Verify the module got built for GA
+
+Before rebooting:
+
+```bash
+dkms status
+```
+
+It must list the driver for the GA kernel, not just for the one you are running. If missing:
+
+```bash
+sudo dkms autoinstall
+```
+
+#### Step 6: Only now, boot into GA
+
+Continue with Case A from Step 3. And add the network to the Step 5 gate, before purging the old
+kernel:
+
+```bash
+ip -br link show                 # the Ethernet interface in UP state
+ping -c 3 archive.ubuntu.com
+```
+
+**Do not purge the HWE kernel until the network works on GA.** While it remains installed you have a
+rescue boot; the pin prevents reinstallation but does not delete what is already there.
 
 ### Ansible Preflight for the Fleet
 
