@@ -217,6 +217,15 @@ check_manual "Kernel compatible con MongoDB 8 (fuera de 6.19-7.0.13)" \
 check_manual "Pin del kernel GA persistente" \
     "check_kernel_pin" \
     "Falta el pin del track GA. Sin él un apt upgrade futuro reinstala el HWE y deja el equipo sin base de datos. Aplica el Paso 7 de la Sección 3."
+check_manual "NIC Ethernet con driver activo (Sección 14 Caso C)" \
+    "check_nic_driver_bound" \
+    "Hay una NIC Ethernet sin driver: el del kernel no soporta ese chip. Con los paquetes 2.3.0+: sudo omnifish-nic-rescue. A mano, Caso C de la Sección 14."
+check_and_fix_warn "Módulos DKMS construidos para el kernel en ejecución" \
+    "check_dkms_current_kernel" \
+    "sudo dkms autoinstall"
+check_manual "Sin blacklist de r8169 (mata las RTL8168/8111)" \
+    "check_no_r8169_blacklist" \
+    "Hay un blacklist de r8169 en /etc/modprobe.d/. Sacalo: mata las RTL8168/8111 y no hace falta, porque el r8169 libera el device cuando no soporta la revision y ahi lo toma el r8125."
 check_and_fix_warn "Transparent Huge Pages habilitado (MongoDB 8 lo requiere)" \
     "check_thp_enabled"
 
@@ -247,6 +256,9 @@ section "8. EMQX (Broker MQTT)"
 check_and_fix "EMQX instalado" \
     "command -v emqx" \
     "fix_emqx_repo_and_install"
+check_and_fix "/etc/emqx/acl.conf presente" \
+    "test -f /etc/emqx/acl.conf" \
+    "fix_emqx_acl"
 check_and_fix_warn "Servicio EMQX activo" \
     "systemctl is-active emqx" \
     "fix_emqx_service"

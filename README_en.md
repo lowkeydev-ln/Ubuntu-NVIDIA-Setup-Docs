@@ -23,6 +23,7 @@
 * [FAQ: Frequently Asked Questions](#faq-frequently-asked-questions)
 * [Annex A: Identifying NVIDIA GPUs](#annex-a-identifying-nvidia-gpus)
 * [Annex B: Compatibility Verification](#annex-b-compatibility-verification)
+* [Annex C: Kernel Compatibility Matrix](#annex-c-kernel-compatibility-matrix-ubuntu-2404-lts)
 
 ---
 
@@ -641,6 +642,23 @@ wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/
 sudo mv cuda-ubuntu2404.pin /etc/apt/preferences.d/cuda-repository-pin-600
 ```
 
+> **Side effect of the pin:** its last rule is `Package: *` with `Pin-Priority: 600`, so
+> **everything** NVIDIA publishes outranks `noble`, including the `dkms` they repackage (it shows
+> up as `dkms/unknown 1:3.2.1-1ubuntu2` in `apt list --upgradable`). The driver module is built by
+> that `dkms`, so swapping it for an out-of-distro build is not worth it. A pin by package name
+> beats the wildcard and hands `dkms` back to Ubuntu, which keeps getting its security updates:
+>
+> ```bash
+> sudo tee /etc/apt/preferences.d/99-dkms-desde-ubuntu >/dev/null <<'EOF'
+> Package: dkms
+> Pin: release l=NVIDIA CUDA
+> Pin-Priority: -1
+> EOF
+> apt-cache policy dkms    # Candidate must be noble's, not 1:3.2.1
+> ```
+>
+> Installers 2.3.1+ write this pin themselves when they apply the CUDA one.
+
 ### Step 2: Download and install the local CUDA 13.0 repository
 
 ```bash
@@ -819,6 +837,18 @@ sudo systemctl status emqx
 # Dashboard at http://localhost:18083 (user: admin, pass: public)
 ```
 
+> **If `emqx` installs but the service never starts:** EMQX 5 will not start without
+> `/etc/emqx/acl.conf`. That file is a dpkg *conffile*, and dpkg treats its absence as
+> an admin decision: if someone deleted or moved it, neither the install nor a plain
+> `--reinstall` puts it back. `--force-confmiss` is the only way to restore it from the
+> package:
+>
+> ```bash
+> ls -l /etc/emqx/acl.conf     # if it is missing, this is your problem
+> sudo apt-get install -y --reinstall -o Dpkg::Options::=--force-confmiss emqx
+> sudo systemctl start emqx && systemctl is-active emqx
+> ```
+
 ### Installing Golang
 
 #### Step 1: Install with Snap
@@ -939,6 +969,7 @@ netstat -tlnp | grep LISTEN  # Lists open ports
 - **MongoDB not starting:** Check logs: `sudo journalctl -u mongod`.
 - **MongoDB not starting and the journal says `MongoDB cannot start: Linux kernel versions 6.19 and newer has a known incompatibility`:** The machine is running the HWE 7.0 kernel. Confirm with `uname -r` and apply [Section 14](#14-runbook-mongodb-8-fails-to-start-on-hwe-kernel-70). Reinstalling `mongodb-org` or editing `/etc/mongod.conf` will not help.
 - **EMQX failing:** Verify ports: `netstat -tlnp | grep 1883`.
+- **EMQX installed but the service is dead and `/etc/emqx/acl.conf` is missing:** dpkg does not restore a conffile that was deleted or moved. Run `sudo apt-get install -y --reinstall -o Dpkg::Options::=--force-confmiss emqx`, then `sudo systemctl start emqx`. `omnifish-doctor-compresion` detects and fixes this case.
 - **GStreamer plugins missing:** `sudo apt install gstreamer1.0-plugins-*`.
 - **AnyDesk/RustDesk not connecting:** Temporarily disable firewall for testing.
 
@@ -1161,9 +1192,30 @@ ip link show  # Look for ethX/enpXsY DOWN
 lspci | grep RTL8125  # Confirm chip
 ```
 
-#### Solution
+#### Fix
 
-Ubuntu 24.04 ships `r8125-dkms` **in its own repositories**; no third-party PPA needed:
+Check the chip revision first, because it decides everything else:
+
+```bash
+lspci -nn | grep -i 8125             # confirm the PCI ID (10ec:8125)
+dmesg | grep -iE 'r8169|r8125|XID'   # the revision shows up as "XID <n>"
+```
+
+| Revision | XID | What handles it |
+|---|---|---|
+| RTL8125A / B / C | 605, 641, 648… | The GA 6.8 in-tree `r8169`, unaided. Change nothing |
+| **RTL8125D** | **688** | Neither the GA `r8169` nor Ubuntu's `r8125-dkms`. See below |
+
+> **An active `r8169` is not, on its own, a problem.** It is the correct driver for the A/B/C
+> revisions on any kernel, and for **all** of them —rev D included— on the HWE 7.x kernels, where
+> the support is already in-tree. The only case where `r8169` is the wrong driver is **RTL8125D
+> (XID 688) on the GA 6.8 track**. Concluding "r8125 must be installed" from seeing `r8169` alone is
+> the classic false positive of this section.
+
+If the interface is UP and `basename $(readlink -f /sys/class/net/<iface>/device/driver)` says
+`r8169`, it already works: install nothing.
+
+For A/B/C revisions that do not come up, the package from Ubuntu's repos is enough:
 
 ```bash
 sudo apt update
@@ -1171,23 +1223,30 @@ sudo apt install -y dkms build-essential linux-headers-generic
 sudo apt install -y r8125-dkms        # for RTL8168/8111 use r8168-dkms
 ```
 
-Only if the chip still won't come up, blacklist the in-tree driver and rebuild the initramfs:
+> **Before installing `r8125-dkms` on a machine you are about to move down to GA:** that package
+> (9.011.00) drops an `r8125.ko` under `updates/dkms/` that does **not** support the RTL8125D, and
+> with it the pre-reboot check of [Case C](#case-c--boards-whose-nic-does-not-work-on-the-ga-kernel)
+> goes green on a board that will still come up with no network. If the board is rev D, or you
+> cannot determine the revision, skip this route: go straight to the vendor driver (>= 9.014.01) or
+> to `sudo omnifish-nic-rescue`.
 
-```bash
-echo 'blacklist r8169' | sudo tee /etc/modprobe.d/blacklist-r8169.conf
-sudo update-initramfs -u
-sudo reboot
-```
+> **For the RTL8125D (XID 688) that package does not work.** noble ships `r8125-dkms` 9.011.00,
+> whose detection code only covers up to revision C and sends XID 688 to `unknown chip version`.
+> You need the vendor driver, version **9.014.01 or newer**. The full procedure — in the order that
+> keeps you from losing the network halfway through — is in
+> [Case C of Section 14](#case-c--boards-whose-nic-does-not-work-on-the-ga-kernel).
 
-> **Try without blacklisting first.** The kernel's `r8169` absorbed RTL8125 support several versions
-> ago and works on its own on many boards. Check with
-> `basename $(readlink -f /sys/class/net/<iface>/device/driver)`: if it says `r8169` and the
-> interface is UP, leave it alone.
+> **Do not blacklist `r8169`.** It is a common reflex and here it does damage: RTL8168/8111 NICs
+> (`10ec:8168`) depend on it, and on dual-port boards it is often the only working link. It is also
+> unnecessary: both modules declare the `10ec:8125` alias, so `modprobe` loads both and the device
+> goes to **whichever probes successfully first**. `r8169` ships in the initramfs and gets there
+> earlier, so it keeps the revisions it supports and `r8125` stays loaded but unused; on the
+> revisions it does not support it fails the probe, releases the device, and `r8125` takes it.
 
 Being DKMS, the module is rebuilt on every kernel change, so this path is compatible with the GA
 track pin that MongoDB 8 requires.
 
-**Verification:** `ip link show` (should be UP), `lspci | grep -i ethernet`
+**Verification (optional):** `ip link show` (should be UP), `lspci | grep -i ethernet`
 
 ### Problems with Intel Ethernet (e.g., I219, I225, I226)
 
@@ -1493,6 +1552,162 @@ esac
 | `doctor_lib.sh` | Shared library with verification, installation, and summary functions. Do not run it directly. |
 | `doctor_compresion.sh` | Verifies and installs components for **compression** workstations (sections 3-6). |
 | `doctor_analitica.sh` | Verifies and installs components for **analytics** workstations (sections 3-5 and 7). |
+| `self_check_doctor_lib.sh` | Exercises `doctor_lib.sh`'s network checks against fake trees in a tmpdir. Touches nothing on the system; use it to validate library changes before shipping them to a machine. |
+| `nic_lib.sh` | Shared library holding the canonical knowledge about Realtek 2.5GbE NICs: revisions/XID, minimum driver version, `.ko` validation, and the two diagnostic rules (driver and stalled chip). Not run directly. |
+| `diag-nic.sh` | Layered diagnosis of **one** network port. Read-only plus a capture; changes no configuration. |
+| `fix-r8125-downgrade-6.8.sh` | Remediation: prepares the driver and the GA 6.8 kernel, verifies, and only then arms the one-shot boot. This one **does** modify the system. |
+| `self_check_nic_lib.sh` | Exercises `nic_lib.sh` and the `diag-nic.sh` rules against field scenarios A–I. No root, no hardware, no network. |
+
+> **Since 2.3.0 the doctors verify the Case C network**, next to the kernel pin in the MongoDB
+> section: that every Ethernet NIC on the PCI bus has a driver bound — the RTL8125D failure shows up
+> in sysfs and needs no cable —, that every DKMS module has a build for the running kernel (an
+> `r8125` built only for the previous kernel leaves the machine without network on the next reboot),
+> and that nobody left a `blacklist r8169` behind, which kills RTL8168/8111 cards.
+
+
+### Network diagnosis and remediation (`diag-nic.sh` and `fix-r8125-downgrade-6.8.sh`)
+
+Both belong to [Case C of Section 14](#case-c--boards-whose-nic-does-not-work-on-the-ga-kernel) and
+share `nic_lib.sh`. **Copy the whole repo to the machine**, not the individual files: without
+`nic_lib.sh` next to them they refuse to start (and say so).
+
+#### Two channels, one source
+
+These scripts — and the three doctors — also travel **inside the OmniFish `.deb` packages**, copied
+byte for byte from this repo at build time. There are not two versions to maintain: the
+`Ubuntu-NVIDIA-Deb-Packages` build pulls them from here, and its suite verifies each file's sha256
+against the original.
+
+| | Loose files from this repo | Inside the `.deb` |
+|---|---|---|
+| What for | **Field**: fixing a conflict on an already deployed machine | **Office**: provisioning machines that go to the field |
+| How they arrive | `scp` of the repo, or a USB stick | Already installed with the package |
+| Invoked as | `./diag-nic.sh`, `./doctor_compresion.sh` | `omnifish-diag-nic`, `omnifish-doctor-compresion`, `omnifish-kernel-downgrade`, `omnifish-doctor-analitica` |
+| Where they live | Wherever you copied them | `/usr/local/lib/omnifish/`, with wrappers in `/usr/local/bin/` |
+
+And the profile installer **finishes by running its doctor** (read-only, no `--fix`), so provisioning
+and verifying is a single command:
+
+```bash
+sudo omnifish-workstation-compression                # installs and ends with the doctor
+sudo omnifish-workstation-compression --no-doctor    # install without verifying
+omnifish-workstation-compression --doctor-only       # verify without installing
+```
+
+`--doctor-only` is the gate mode: it installs nothing, **needs no root** (the doctor in read-only
+mode touches nothing) and **exits with the number of failures as its exit code**, so it can decide
+whether a machine ships:
+
+```bash
+if omnifish-workstation-compression --doctor-only; then
+  echo "ready for the field"
+fi
+```
+
+At the end of an install it is the other way round: there the doctor reports and does **not** change
+the installer's exit code, because the install did what it could do.
+
+> **`omnifish-kernel-downgrade` (that is, `fix-r8125-downgrade-6.8.sh`) is never invoked
+> automatically.** The kernel pin, the NIC gate and the provisioning `grub-reboot` are already done
+> by `omnifish-nvidia-setup --fix-kernel` together with `omnifish-nic-rescue`. This script exists for
+> the machine that is **already in the field** and additionally needs the ASPM/EEE hardening, the
+> self-healing watchdog and the MAC-matched netplan persistence. It detects the installer's pin and
+> does not write a second file, so running it afterwards is safe; what makes no sense is alternating
+> between the two.
+
+#### `diag-nic.sh` — read-only
+
+```bash
+sudo ./diag-nic.sh <interface> [capture_seconds] [test_gateway]
+sudo ./diag-nic.sh enp13s0 30 172.20.66.1
+```
+
+It leaves three artifacts in the current directory: the full log, a `.pcap` of the unfiltered
+capture, and one line in `diag-results.csv` for consolidating several machines.
+
+The summary does **not** mix observations with causes. Every finding lands in one block with one
+severity:
+
+| Block | Answers |
+|---|---|
+| `SALUD ACTUAL DEL LINK` | Is the NIC working right now? |
+| `DRIVER / HARDWARE` | Is the bound driver the right one for this chip and this kernel? |
+| `DHCP / L3` | Is there an IP and reachability? |
+| `PERSISTENCIA TRAS REBOOT` | Does this survive the next reboot? |
+| `RIESGOS DE CONFIGURACIÓN` | Pending good practices and switch-side hints |
+
+| Severity | Means |
+|---|---|
+| `[INFO]` | Observation. Nothing to do |
+| `[AVISO]` | Risk or pending good practice. **Not** a current failure |
+| `[SOSPECHA]` | Consistent with a failure, but the evidence is not enough to assert it |
+| `[FALLO]` | Confirmed with the available evidence |
+
+Exit codes, for fleet consolidation: `0` no findings, `1` warnings, `2` suspicions, `3` failures.
+
+**Two things this script deliberately does not do.** It does not flag `r8169` as the wrong driver on
+its own: the rule looks at kernel, PCI ID, XID and the driver actually bound in sysfs
+(`readlink -f /sys/class/net/<iface>/device/driver`, equivalent to `ethtool -i`), never `lsmod`. And
+it does not declare a chip "stalled" because `rx_packets` did not move for a few seconds: it combines
+RX and interrupts over a long window (>= 30 s), the unfiltered capture, and a **recent, timestamped**
+`NETDEV WATCHDOG`, and reports one of four levels — `NORMAL`, `SOSPECHOSO`, `PROBABLE`,
+`MUY_FUERTE`. If the capture saw traffic, the chip receives and nothing can push it past
+`SOSPECHOSO`, however many signals pile up.
+
+**Layer 8** is the one that matters before a remote downgrade: if the board has a `10ec:8125` and the
+machine is not yet on GA, it verifies that an `r8125.ko` **of a sufficient version** exists for the
+target 6.8 kernel and is indexed in `modules.alias`. If it is missing, the summary says
+`NO REINICIAR al kernel GA todavía`.
+
+#### `fix-r8125-downgrade-6.8.sh` — modifies the system
+
+```bash
+sudo ./fix-r8125-downgrade-6.8.sh --dry-run    # see what it would do
+sudo ./fix-r8125-downgrade-6.8.sh
+```
+
+It runs, in this order and on the old kernel **with the network still alive**: connectivity check,
+NIC analysis and `r8125` build against the 6.8 headers, ASPM/EEE hardening, GA kernel install with
+pin and hold, self-healing watchdog, MAC-matched network persistence, and only at the end a
+**pre-reboot gate** that prints an auditable checklist:
+
+```
+kernel image · initramfs · configured packages (modules-extra included) ·
+GRUB entry · apt pin · no r8169 blacklist ·
+r8125.ko present, of sufficient version, valid for modinfo, depmod done
+and PCI alias indexed
+```
+
+If anything critical is missing it prints **`NO REINICIAR`**, does not arm the one-shot boot and
+exits `1`. Only with a complete checklist does it run `grub-reboot` and say `SEGURO REINICIAR`. That
+ordering is deliberate: the machine is never left pointing at a kernel that cannot bring up the
+network.
+
+#### Re-running is cheap: check before acting
+
+Both scripts get re-run often — a phase fails, something is fixed, you run it again — so **no step
+redoes work already done**. `fix-r8125-downgrade-6.8.sh` writes each configuration file only if its
+content differs from what is already on disk, and the expensive operations hang off that:
+
+| File | What a re-run avoids |
+|---|---|
+| `/etc/modprobe.d/omnifish-r8125-options.conf` | `update-initramfs -u -k` (~30 s) |
+| `/etc/udev/rules.d/90-omnifish-r8125-override-*.rules` | `udevadm control --reload-rules` |
+| `r8125-zombie-watchdog.sh`, `.service`, `.timer` | `systemctl daemon-reload` |
+| `/etc/apt/preferences.d/99-omnifish-pin-ga-kernel` | rewriting the pin |
+
+The steps that were already guarded stay that way: it does not rebuild `r8125` if a valid one exists
+for the target kernel, does not reinstall the GA kernel if the packages are properly configured, and
+does not write a second pin if the installer's is already there. The watchdog's
+`systemctl enable --now` does run every time, deliberately: it is idempotent and cheap, and it
+repairs a timer someone disabled by hand.
+
+`diag-nic.sh` does not apply: it only reads and captures.
+
+> **Run `./self_check_nic_lib.sh` after touching any of those three files.** It covers field
+> scenarios A–I (legitimate `r8169` on 6.8, real RTL8125D, 7.x kernel, quiet network, stalled chip
+> with strong evidence, no carrier, DHCP with no Offer, ephemeral profile, undeterminable XID)
+> without touching the system.
 
 ### Basic Usage
 
@@ -1728,6 +1943,18 @@ Unmistakable signature in the journal:
 > **Mandatory order:** pinning → purge → verify GRUB → reboot.
 > Reversing it leaves windows where apt reinstalls HWE, or where the machine boots into 7.0 unattended.
 
+> **With the `.deb` packages 2.4.0+ this runbook is automated**, in that same order:
+>
+> ```bash
+> sudo omnifish-nvidia-setup --fix-kernel   # pin + NIC gate + one-shot boot into the GA
+> sudo reboot
+> sudo omnifish-nvidia-setup --fix-kernel   # already on the GA: purge the blocked kernels
+> ```
+>
+> It infers the phase from `uname -r`, refuses to set that boot if the GA driver does not cover the
+> NIC (Case C), and asks for confirmation before purging. The steps below are the reference for what
+> each one does and what to verify — and the route when the machine does not have the packages.
+
 #### Step 1: Pinning and blocking (first, always)
 
 ```bash
@@ -1816,7 +2043,7 @@ E: Couldn't find any package by glob 'linux-modules-extra-7.0.0-28*'
 Enumerate what is actually installed first:
 
 ```bash
-dpkg -l | awk '/^ii/ && /7\.0\.0/ {print $2}'
+dpkg -l | awk '/^ii/ && $2 ~ /^linux-.*7\.0\.0/ {print $2}'
 ```
 
 Typical output (6 packages):
@@ -1834,7 +2061,7 @@ Purge that list and **review apt's summary before confirming**: it must contain 
 If anything with `6.8.0-1XX` or `nvidia-dkms-*` shows up, cancel.
 
 ```bash
-sudo apt purge $(dpkg -l | awk '/^ii/ && /7\.0\.0/ {print $2}')
+sudo apt purge $(dpkg -l | awk '/^ii/ && $2 ~ /^linux-.*7\.0\.0/ {print $2}')
 sudo apt autoremove --purge
 sudo update-grub
 ```
@@ -1848,7 +2075,7 @@ sudo update-grub                                       # must list only 6.8
 ls /boot/vmlinuz-*                                     # a single image
 sudo grub-editenv list                                 # next_entry= empty
 dkms status                                            # only 6.8.0-1XX-generic
-dpkg -l | awk '/^(i|h)i/ && /7\.0\.0/ {print $2}'      # no output
+dpkg -l | awk '/^(i|h)i/ && $2 ~ /^linux-.*7\.0\.0/ {print $2}'      # no output
 sudo apt full-upgrade -s \
   | grep -E '^Inst (linux-image|linux-modules|linux-headers|linux-generic|linux-hwe)' \
   || echo "no kernel changes"
@@ -1953,12 +2180,22 @@ Apply the pin from Case A Step 1, then:
 sudo apt install --install-recommends linux-generic
 ```
 
-This brings in `linux-modules-6.8.0-1XX-generic`, which is where `igc`, `e1000e`, `igb` and `r8169`
-live. They are not in `linux-modules-extra`: any normally installed kernel has them.
+This brings in the GA modules. Where each driver actually lives, verified against the 6.8.0-137
+packages:
+
+| Package | Ethernet drivers it contains |
+|---|---|
+| `linux-modules-6.8.0-1XX-generic` | `e1000e`, `igb`, `ixgbe`, `i40e`, `8139too`… |
+| `linux-modules-extra-6.8.0-1XX-generic` | **`r8169`**, **`igc`**, `atlantic`, and the rest |
+
+The two that matter for this problem — `r8169` (Realtek) and `igc` (Intel I225/I226) — live in
+`linux-modules-extra`. They arrive either way: `linux-image-generic` **depends** on it, it does not
+merely recommend it. But if you are hunting for the file by hand, that is where it is, not in
+`linux-modules`.
 
 #### Step 3: Ask the GA driver whether it knows your board
 
-Still without rebooting. This is the check that decides the path:
+Still without rebooting:
 
 ```bash
 GA=$(ls /lib/modules | grep '^6\.8\.' | sort -V | tail -1)
@@ -1967,73 +2204,175 @@ ID=8086:125c             # the PCI ID from Step 1
 
 ALIAS="pci:v0000$(echo "${ID%:*}" | tr 'a-f' 'A-F')d0000$(echo "${ID#*:}" | tr 'a-f' 'A-F')"
 modinfo -k "$GA" "$DRV" | grep -qi "$ALIAS" \
-  && echo "OK: the GA $GA driver knows $ID" \
-  || echo "MISSING: the GA $GA driver does not declare $ID"
+  && echo "OK: GA driver $GA knows $ID" \
+  || echo "MISSING: GA driver $GA does not declare $ID"
 ```
 
 `modinfo -k` queries **another** kernel's module, so it works before booting it. It requires that
-kernel's `linux-modules-*` to be installed, which is what Step 2 did.
+kernel's `linux-modules-extra-*` to be installed, which is what Step 2 did.
+
+> **This check is useless for Realtek 2.5GbE.** The GA's `r8169` declares its alias with a
+> revision wildcard:
+>
+> ```
+> alias: pci:v000010ECd00008125sv*sd*bc*sc*i*     (6.8.0-137, linux-modules-extra)
+> ```
+>
+> It matches revisions A, B, C and D, but the code only handles up to C. With an **RTL8125D** it
+> claims the device and only then gives up:
+>
+> ```
+> r8169 0000:07:00.0: unknown chip XID 688
+> ```
+>
+> So the command above prints **OK** and the interface still will not come up. For `10ec:8125` go
+> straight to Step 4: no prior check rules it out, and installing the driver you did not strictly
+> need costs nothing.
 
 | Result | Path |
 |---|---|
-| **OK** | GA supports the board. Continue with normal Case A from Step 3 (boot into 6.8) |
-| **MISSING** | Go to Step 4 of this section **before** rebooting |
-
-> A `MISSING` does not always mean it will not work: some drivers match by class or wildcard. But if
-> the NIC already died once on GA, `MISSING` confirms it.
+| `10ec:8125` (any revision) | Step 4 always — the alias proves nothing |
+| **OK** for anything else | GA supports the board. Normal Case A from Step 3 |
+| **MISSING** | Step 4 **before** rebooting |
 
 #### Step 4: Bring the driver in via DKMS, with the network still alive
 
-DKMS is the right answer because it **rebuilds the module on every kernel change**, so it survives GA
-series updates. Confirmed: `/etc/kernel/postinst.d/dkms` triggers on kernel install, and one module
-ends up built for every kernel present.
+DKMS is the right answer because it **rebuilds the module on every kernel change**, so it survives
+GA-series updates. `/etc/kernel/postinst.d/dkms` triggers it when a kernel is installed, and one
+module ends up built for every kernel present.
 
-For Realtek 2.5GbE, noble ships it in its own repositories — **the third-party PPA mentioned in
-Section 9 is not needed**:
+**Realtek 2.5GbE (`10ec:8125`).** Ubuntu's own `r8125-dkms` is **not enough**. noble ships
+9.011.00, whose hardware detection switch covers `0x60800000`, `0x64000000` and `0x64800000`
+(CFG_METHOD_2 through 8) and sends anything else to `default: unknown chip version`. XID 688 is
+`0x68800000`: it lands there. The source never mentions the 8125D — only A, B and C.
+
+You need the vendor driver, **version 9.014.01 or newer**, packaged for DKMS:
 
 ```bash
-sudo apt install -y dkms build-essential linux-headers-generic
-sudo apt install -y r8125-dkms      # RTL8125. For RTL8168/8111: r8168-dkms
+sudo apt install -y dkms build-essential "linux-headers-$GA"
+
+# If Ubuntu's package is installed, remove it: two modules claiming 10ec:8125
+sudo apt purge -y r8125-dkms
+
+VER=9.016.01-1
+wget "https://github.com/awesometic/realtek-r8125-dkms/releases/download/${VER}/realtek-r8125-dkms_${VER}_amd64.deb"
+sudo dpkg -i "realtek-r8125-dkms_${VER}_amd64.deb"
 ```
 
-For Intel `igc` (I225/I226) there is no DKMS package in the repositories: you have to build from the
-source Intel publishes in its Download Center and wrap it in DKMS so it survives kernel changes. More
-work, which is why the two hardware alternatives often win on time:
+The `postinst` builds for the **running** kernel (the HWE), and that build may fail against a newer
+kernel's APIs. It does not matter: on the HWE the in-tree `r8169` already handles the 8125D. The
+only critical part is that it gets built for GA, which you force separately:
 
-- **Intel I210 or I350 PCIe NIC.** Solid on GA 6.8, no DKMS to maintain. Cheapest option measured in
-  operator hours.
-- **USB Ethernet adapter.** Immediate. Verify it supports Wake-on-LAN if that station needs it, since
-  many do not.
+```bash
+sudo dkms install realtek-r8125/9.016.01 -k "$GA" --force
+```
+
+> **Do not blacklist `r8169`.** The vendor package sometimes does it for you, and that kills
+> RTL8168/8111 NICs (`10ec:8168`), which depend on it — on dual-port boards that is often the only
+> working link. It is unnecessary, and the real mechanism is not `depmod`'s search order: both
+> modules declare the `10ec:8125` alias, `modprobe` loads both, and the device goes to whichever
+> probes successfully first. `r8169` ships in the initramfs and gets there earlier — measured in the
+> field, `r8169` at 0.8 s and `r8125` at 3.4 s — so it keeps the revisions it supports and `r8125`
+> stays loaded but unused, harmlessly. On the 8125D it fails the probe, releases the device, and
+> `r8125` takes it.
+>
+> **This is why verification is by bound driver, not by loaded module:**
+>
+> ```bash
+> ethtool -i enp5s0 | head -2      # driver: r8125 if r8169 rejected the card
+> lsmod | grep -E 'r8169|r8125'    # both may be loaded: proves nothing
+> ```
+>
+> ```bash
+> grep -rl 'blacklist[[:space:]]\+r8169' /etc/modprobe.d/   # if it returns anything, delete that line
+> ```
+
+**Intel `igc` (I225/I226).** There is no DKMS package in the repos: you have to build from the
+source Intel publishes in its Download Center and wrap it in DKMS. More work, which is why the two
+hardware alternatives usually win on time:
+
+- **Intel I210 or I350 PCIe NIC.** Solid on GA 6.8, no DKMS to maintain. Cheapest option measured
+  in operating hours.
+- **USB Ethernet adapter.** Immediate. Check that it supports Wake-on-LAN if that station needs it,
+  because many do not.
 
 If there is no network at all to download the DKMS package, use USB tethering from a phone or carry
-the `.deb` and its dependencies on a flash drive.
+the `.deb` and its dependencies on a USB stick.
+
+> If you are provisioning with the OmniFish `.deb` packages, `omnifish-nic-rescue` does this whole
+> step. It ships inside `omnifish-nvidia-setup`, `-compression` and `-analytics`. It detects the
+> NIC, removes the old `r8125-dkms`, fetches the vendor one, builds for GA, strips the blacklist and
+> verifies. With `--deb PATH` or `--no-download` it works offline.
 
 #### Step 5: Verify the module got built for GA
 
-Before rebooting:
+**Before rebooting** — this is what decides whether it is safe to. `dkms status` is the first step
+but not enough:
 
 ```bash
 dkms status
+sudo dkms autoinstall     # if it does not list the module for GA
 ```
 
-It must list the driver for the GA kernel, not just for the one you are running. If missing:
+What actually loads the driver at boot is `udev` consulting `modules.alias`. Check the file, **its
+version** and the index, in that order:
 
 ```bash
-sudo dkms autoinstall
+sudo depmod -a "$GA"
+
+# 1. The .ko exists, and it is under updates/ (which is what beats the in-tree one)
+KO=$(find "/lib/modules/$GA/updates" -name 'r8125.ko*' -print -quit)
+echo "${KO:-NO MODULE}"
+
+# 2. And it is the vendor one, not noble's 9.011.00
+modinfo -F version "$KO"          # must be >= 9.014.01
+
+# 3. udev will find it by alias
+awk '$1=="alias" && index($2,"pci:v000010ECd00008125")==1 {print $3}' \
+    "/lib/modules/$GA/modules.alias"
 ```
+
+The first must return a path, the second a version **9.014.01 or higher**, and the third must
+include `r8125`. If the `find` comes back empty, **do not reboot**: the machine will come up with
+no network.
+
+> **Step 2 is not optional, and it was missing from this guide for a while.** noble's `r8125-dkms`
+> 9.011.00 also drops an `r8125.ko` under `updates/dkms/`, so step 1 returns a path and everything
+> looks fine — but that driver still sends XID 688 to `unknown chip version`. It is the most
+> expensive **false green** in this runbook: the check passes, you reboot, and the rev D board comes
+> up with no network. If the version is below 9.014.01, treat it as **MISSING** and go back to
+> Step 4.
+
+> Do not use `modinfo -k "$GA" r8125` for this. In `/lib/modules` trees created only by DKMS, with
+> no kernel package, `modinfo` by name gives false negatives. Verify by file.
 
 #### Step 6: Only now, boot into GA
 
-Continue with Case A from Step 3. And add the network to the Step 5 gate, before purging the old
-kernel:
+Use a **one-shot** boot instead of changing the default. If the network does not come up, the next
+reboot returns to the previous kernel on its own and you keep your access:
+
+```bash
+sudo grub-reboot "Advanced options for Ubuntu>Ubuntu, with Linux $GA"
+sudo reboot
+```
+
+Once up, add the network to the Case A Step 5 gate, before purging the old kernel:
 
 ```bash
 ip -br link show                 # the Ethernet interface in UP state
+ethtool -i enp5s0 | head -2      # WHICH driver got bound, not which one is loaded
 ping -c 3 archive.ubuntu.com
 ```
 
-**Do not purge the HWE kernel until the network works on GA.** While it remains installed you have a
-rescue boot; the pin prevents reinstallation but does not delete what is already there.
+With the network validated, only then pin GA as the permanent default:
+
+```bash
+sudo sed -i "s|^GRUB_DEFAULT=.*|GRUB_DEFAULT=\"Advanced options for Ubuntu>Ubuntu, with Linux $GA\"|" /etc/default/grub
+sudo update-grub
+```
+
+**Do not purge the HWE kernel until the network works on GA.** While it stays installed you have a
+rescue boot; the pin stops it from being reinstalled, but does not delete what is already there.
 
 ### Ansible Preflight for the Fleet
 
@@ -2278,7 +2617,7 @@ Based on NVIDIA docs and internal validation. For this manual, the standard comb
 - **Driver too old for CUDA:** Install a newer NVIDIA driver by following section 4 with the `.run` file.
 - **CUDA doesn't recognize GPU:** Verify with `nvidia-smi`. If fails, reinstall drivers.
 - **`apt` wants to install `nvidia-driver-*` while installing CUDA:** you are calling a meta-package (`cuda` or `cuda-drivers`). Use only `cuda-toolkit-XX-Y`.
-- **Kernel mismatch:** Update kernel: `sudo apt update && sudo apt upgrade`.
+- **Kernel mismatch:** do **not** update the kernel to fix this. On 24.04 the kernel is pinned to the GA 6.8 track because of MongoDB (Section 14), and today an unpinned `apt upgrade` pulls 7.0 via HWE. Install the headers for the kernel you are already running (`sudo apt install linux-headers-$(uname -r)`) and reinstall the `.run`. See [Annex C](#annex-c-kernel-compatibility-matrix-ubuntu-2404-lts).
 - **GCC incompatible:** Install correct version: `sudo apt install gcc-12 g++-12` and reconfigure with `update-alternatives` if needed.
 
 ### General Tips
@@ -2291,3 +2630,81 @@ Based on NVIDIA docs and internal validation. For this manual, the standard comb
 > * [NVIDIA CUDA Toolkit Release Notes](https://docs.nvidia.com/cuda/cuda-toolkit-release-notes/index.html)
 > * [NVIDIA Container Toolkit Install Guide](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html)
 > * [Ubuntu NVIDIA Drivers PPA](https://launchpad.net/~graphics-drivers/+archive/ubuntu/ppa)
+
+## Annex C: Kernel Compatibility Matrix (Ubuntu 24.04 LTS)
+
+> **What this annex is for.** The operational question is not "which version of each package am I
+> running?" but "which of these components breaks if the kernel moves?". There are three. Everything
+> else in the install is userspace on noble's glibc 2.39 and does not change with the kernel series.
+> The snowball is not built by package versions: it is built by mixing kernel tracks.
+>
+> Data verified against Launchpad, the MongoDB repository and kernel.org on **21 August 2026**.
+
+### C.1 Kernel series available for 24.04
+
+| Series | Where it comes from | Latest published for noble | Support | MongoDB 8 |
+|--------|---------------------|----------------------------|---------|-----------|
+| **6.8 GA** | 24.04's own kernel | `6.8.0-138` (updates/security), `6.8.0-139` in proposed | **April 2029** standard, ESM Pro to 2034 | ✅ |
+| 6.11 | HWE from 24.10 | `6.11.0-29` | Superseded series | ✅ boots |
+| 6.14 | HWE from 25.04 | `6.14.0-37` | Superseded series | ✅ boots |
+| 6.17 | HWE from 25.10 | `6.17.0-42` | Superseded by 7.0, goes away with the phase-out | ✅ (not validated in production) |
+| 6.18 | **Ubuntu never packaged it** | — | Mainline PPA only | — |
+| **7.0** | 26.04, and 24.04's current HWE | `7.0.0-30.30~24.04.1` | This is what `linux-generic-hwe-24.04` points to today | ❌ SERVER-121912 |
+
+> **This has stopped being a future risk.** `linux-generic-hwe-24.04` in noble-updates **is already
+> 7.0**. An unpinned machine running `apt full-upgrade` pulls 7.0 and loses MongoDB on the next
+> reboot. The pin in [Case A of Section 14](#case-a--machine-already-deployed-running-kernel-70) is
+> the only thing stopping it.
+
+### C.2 Is 6.18 a candidate?
+
+It has upstream support until **December 2028** — kernel.org marks it `longterm`, released
+2025-11-30 — so at first glance it looks like the elegant way out: newer than GA, older than the 6.19
+that breaks MongoDB. It is not, for three reasons:
+
+1. **Ubuntu never packaged it.** The jump was 6.17 (25.10) → 7.0 (26.04). The sources `linux-6.18`,
+   `linux-hwe-6.18` and `linux-oem-6.18` do not exist in the archive, in any Ubuntu series.
+2. **The only route would be the mainline PPA.** Unsigned kernels — Secure Boot has to stay off —
+   with no Ubuntu patches, no security updates and no metapackage tracking them. Every kernel CVE
+   becomes manual work, on every workstation.
+3. **GA has more coverage, not less.** 24.04's 6.8 is supported until **April 2029**, and with ESM Pro
+   until 2034: longer than 6.18's upstream December 2028, and with signed modules and headers in the
+   archive so DKMS can build.
+
+And if the reason for wanting a newer kernel is hardware — the NIC in
+[Case C](#case-c--boards-whose-nic-does-not-work-on-the-ga-kernel) — the kernel is not the lever: the
+answer is **a newer driver via DKMS on the old kernel**.
+
+### C.3 The components, and which one watches the kernel
+
+| Component | Version in use | Kernel-dependent? | Real constraint |
+|-----------|----------------|-------------------|-----------------|
+| **MongoDB 8.0** (`mongodb-org`, currently 8.0.28) | official repo for noble | Indirectly: its TCMalloc uses `rseq` | **Hard ceiling: breaks between 6.19 and 7.0.13** (SERVER-121912). The only component that sets an upper bound |
+| **NVIDIA `.run` driver 580.x** + CUDA 13.0 + cuDNN 9 | 580 branch (upstream currently 580.178.04) | **Yes**: builds its module against the kernel headers | Moving ceiling: every new kernel can break the build until NVIDIA ships support. With a fixed kernel the problem does not exist |
+| **`realtek-r8125-dkms`** (9.016.01; 9.018.00 exists since 2026-07-25) | vendor driver | **Yes** (DKMS) | Rebuilt on every kernel change. The build against a very new kernel may fail; the one that matters is the GA build |
+| EMQX Enterprise 5 | EMQX repo | No (BEAM, userspace) | None |
+| Node.js + Node-RED | NodeSource | No | None |
+| ML stack (PyTorch and friends, via `pip`) | on noble's python3.12 | Not directly | Decided by CUDA/driver, not the kernel |
+| ClamAV, Lynis, Fail2Ban, UFW, `wireguard-tools`, BorgBackup, rsync | noble | No | None |
+| Snaps | noble's `snapd` | No | None |
+
+**Three axes, not twenty.** One hard ceiling (MongoDB), one moving ceiling (NVIDIA's `.run`) and one
+rebuild (DKMS). Pinning GA 6.8 closes all three at once: it sits below MongoDB's ceiling, it is the
+kernel this manual's 580.x was validated on, and it makes DKMS rebuilds deterministic. **As long as
+the kernel does not move, there is no matrix to maintain.**
+
+### C.4 Auditing a machine in one minute
+
+```bash
+hostname
+uname -r                                             # must say 6.8.0-*
+apt-cache policy linux-generic-hwe-24.04 | head -3   # with the pin, the candidate is (none)
+mongod --version | head -1
+nvidia-smi --query-gpu=driver_version --format=csv,noheader
+dkms status
+dpkg-query -W -f='${Package} ${Version} ${Status}\n' \
+  'linux-image-generic*' 'r8125*' 'realtek-r8125*' 2>/dev/null
+```
+
+The doctor scripts in [Section 12](#12-doctor-verification-scripts) already carry the kernel check;
+this adds the version inventory to file alongside the machine.

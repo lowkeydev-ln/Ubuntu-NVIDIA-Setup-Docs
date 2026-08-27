@@ -305,6 +305,47 @@ check_kernel_pin() {
     [[ "$out" == *"Candidate: (none)"* ]]
 }
 
+# NIC Ethernet con driver activo (Sección 14 Caso C). No hace falta cable: si el
+# driver del kernel toma el dispositivo y falla el probe —el r8169 con un
+# RTL8125D muere en "unknown chip XID 688"— el dispositivo queda sin driver y sin
+# interfaz, y eso se ve en sysfs. Clase 0x0200xx = Ethernet.
+# El primer argumento existe para poder probar la función contra un árbol falso.
+check_nic_driver_bound() {
+    local base="${1:-/sys/bus/pci/devices}"
+    local d rc=0
+    for d in "$base"/*; do
+        case "$(cat "$d/class" 2>/dev/null)" in 0x0200*) ;; *) continue ;; esac
+        [ -e "$d/driver" ] || rc=1
+    done
+    return $rc
+}
+
+# Todo módulo DKMS con build para el kernel en ejecución. Un r8125 construido
+# solo para el kernel anterior deja el equipo sin red después del próximo
+# reinicio, y el momento de verlo es ahora, con red.
+check_dkms_current_kernel() {
+    local out="${1:-}" k="${2:-$(uname -r)}"
+    [ -n "$out" ] || out=$(dkms status 2>/dev/null || true)
+    [ -n "$out" ] || return 0
+    awk -v k="$k" '
+        NF == 0 { next }
+        { m=$1; sub(/[,/].*/,"",m); mods[m]=1; if (index($0,k)) ok[m]=1 }
+        END { for (m in mods) if (!(m in ok)) exit 1 }' <<<"$out"
+}
+
+# El blacklist de r8169 es un reflejo común y acá hace daño: las RTL8168/8111
+# (10ec:8168) dependen de él, y en placas de dos puertos suele ser el único
+# enlace que funciona. Tampoco hace falta: los dos módulos declaran el alias del
+# 10ec:8125 y el device se lo queda el primero cuyo probe funcione. El r8169
+# rechaza las revisiones que no soporta y libera el device, así que el r8125 lo
+# toma sin ayuda. Se captura la salida en vez de pipear a grep -q, que mata a
+# grep -rls con SIGPIPE.
+check_no_r8169_blacklist() {
+    local dir="${1:-/etc/modprobe.d}" hits
+    hits=$(grep -rls 'blacklist[[:space:]]\+r8169' "$dir" 2>/dev/null || true)
+    [ -z "$hits" ]
+}
+
 # MongoDB 8.0 requiere THP habilitado, al revés que 7.0 y anteriores
 check_thp_enabled() {
     local f=/sys/kernel/mm/transparent_hugepage/enabled
@@ -496,8 +537,17 @@ fix_emqx_repo_and_install() {
     sudo apt-get install -y emqx
 }
 
+# --- /etc/emqx/acl.conf ---
+# EMQX 5 no arranca sin ese archivo, y dpkg trata un conffile ausente como
+# decision del admin: no lo repone ni en un reinstall normal. --force-confmiss
+# es lo unico que lo devuelve. Sintoma: paquete instalado, servicio muerto.
+fix_emqx_acl() {
+    sudo apt-get install -y --reinstall -o Dpkg::Options::=--force-confmiss emqx
+}
+
 # --- Servicio EMQX ---
 fix_emqx_service() {
+    [ -f /etc/emqx/acl.conf ] || fix_emqx_acl
     sudo systemctl start emqx && sudo systemctl enable emqx
 }
 
