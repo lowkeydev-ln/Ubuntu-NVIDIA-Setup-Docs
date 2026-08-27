@@ -227,6 +227,148 @@ check_manual() {
 }
 
 # =============================================================================
+# --- Verificación de paquetes dpkg ---
+# =============================================================================
+
+# apt-mark hold cambia el estado en "dpkg -l" de "ii" a "hi" (primer carácter =
+# acción deseada, segundo = estado real), así que grep '^ii' da falso negativo
+# sobre paquetes en hold — por ejemplo dkms fijado al de noble para no tomar el
+# del repo local de CUDA (Sección 14, cabos sueltos).
+# Además "dpkg -l | grep -q" falla con set -o pipefail: grep -q corta el pipe,
+# dpkg muere con SIGPIPE (141) y la condición evalúa falso aunque el paquete
+# exista. dpkg-query evita las dos trampas. Acepta globs.
+pkg_installed() {
+    local out
+    out=$(dpkg-query -W -f='${db:Status-Status}\n' "$1" 2>/dev/null || true)
+    # Match de LINEA COMPLETA. dpkg-query tambien devuelve entradas
+    # "not-installed" y "config-files", y "not-installed" contiene
+    # "installed" como substring: comparar con *installed* da falso
+    # positivo. Here-string, no pipeline, asi que pipefail no interfiere.
+    grep -qx 'installed' <<<"$out"
+}
+
+# NOTA para futuros checks: si el valor de retorno de una función es un pipeline
+# que termina en `grep -q`, con `set -o pipefail` puede dar falso. Capturá la
+# salida en una variable y compará con `[[ "$out" == *patrón* ]]`.
+
+# =============================================================================
+# --- Verificaciones que el manual exige y no estaban cubiertas ---
+# =============================================================================
+
+# Rama del driver fijada por la Sección 4 / Anexo B
+NVIDIA_BRANCH_EXPECTED="580"
+
+check_nvidia_branch() {
+    local v
+    v=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1)
+    [ -n "$v" ] || return 1
+    [ "${v%%.*}" = "$NVIDIA_BRANCH_EXPECTED" ]
+}
+
+# El módulo debe venir del .run, no de APT (Secciones 3 y 4). Un equipo con
+# nvidia-driver-* de APT pasaba todos los checks NVIDIA aunque el manual lo
+# trate como error a purgar.
+check_nvidia_not_from_apt() {
+    local p
+    for p in 'nvidia-*' 'libnvidia-*' 'cuda-drivers*'; do
+        if pkg_installed "$p"; then
+            return 1
+        fi
+    done
+    return 0
+}
+
+# Módulo open/MIT-GPL, recomendado por la Sección 4 Paso 5 para RTX 20/30/40/50
+check_nvidia_open_module() {
+    local out
+    out=$(modinfo nvidia 2>/dev/null || true)
+    [[ "$out" == *"Dual MIT/GPL"* ]]
+}
+
+# Versión de CUDA fijada por la Sección 5
+CUDA_VERSION_EXPECTED="13.0"
+
+check_cuda_version() {
+    local v
+    v=$(nvcc --version 2>/dev/null | grep -oE 'release [0-9]+\.[0-9]+' | head -1 | awk '{print $2}')
+    [ "$v" = "$CUDA_VERSION_EXPECTED" ]
+}
+
+# Pin del kernel GA persistente (Sección 3 Paso 7 / Sección 14). Verificar solo
+# "uname -r" no alcanza: un equipo en 6.8 sin pin vuelve al HWE en el próximo
+# apt upgrade y se queda sin base de datos.
+check_kernel_pin() {
+    [ -f /etc/apt/preferences.d/99-no-hwe-kernel ] || return 1
+    [ -f /etc/apt/apt.conf.d/51-block-hwe-kernel ] || return 1
+    local out
+    out=$(apt-cache policy linux-generic-hwe-24.04 2>/dev/null || true)
+    [[ "$out" == *"Candidate: (none)"* ]]
+}
+
+# NIC Ethernet con driver activo (Sección 14 Caso C). No hace falta cable: si el
+# driver del kernel toma el dispositivo y falla el probe —el r8169 con un
+# RTL8125D muere en "unknown chip XID 688"— el dispositivo queda sin driver y sin
+# interfaz, y eso se ve en sysfs. Clase 0x0200xx = Ethernet.
+# El primer argumento existe para poder probar la función contra un árbol falso.
+check_nic_driver_bound() {
+    local base="${1:-/sys/bus/pci/devices}"
+    local d rc=0
+    for d in "$base"/*; do
+        case "$(cat "$d/class" 2>/dev/null)" in 0x0200*) ;; *) continue ;; esac
+        [ -e "$d/driver" ] || rc=1
+    done
+    return $rc
+}
+
+# Todo módulo DKMS con build para el kernel en ejecución. Un r8125 construido
+# solo para el kernel anterior deja el equipo sin red después del próximo
+# reinicio, y el momento de verlo es ahora, con red.
+check_dkms_current_kernel() {
+    local out="${1:-}" k="${2:-$(uname -r)}"
+    [ -n "$out" ] || out=$(dkms status 2>/dev/null || true)
+    [ -n "$out" ] || return 0
+    awk -v k="$k" '
+        NF == 0 { next }
+        { m=$1; sub(/[,/].*/,"",m); mods[m]=1; if (index($0,k)) ok[m]=1 }
+        END { for (m in mods) if (!(m in ok)) exit 1 }' <<<"$out"
+}
+
+# El blacklist de r8169 es un reflejo común y acá hace daño: las RTL8168/8111
+# (10ec:8168) dependen de él, y en placas de dos puertos suele ser el único
+# enlace que funciona. Tampoco hace falta: los dos módulos declaran el alias del
+# 10ec:8125 y el device se lo queda el primero cuyo probe funcione. El r8169
+# rechaza las revisiones que no soporta y libera el device, así que el r8125 lo
+# toma sin ayuda. Se captura la salida en vez de pipear a grep -q, que mata a
+# grep -rls con SIGPIPE.
+check_no_r8169_blacklist() {
+    local dir="${1:-/etc/modprobe.d}" hits
+    hits=$(grep -rls 'blacklist[[:space:]]\+r8169' "$dir" 2>/dev/null || true)
+    [ -z "$hits" ]
+}
+
+# MongoDB 8.0 requiere THP habilitado, al revés que 7.0 y anteriores
+check_thp_enabled() {
+    local f=/sys/kernel/mm/transparent_hugepage/enabled
+    [ -f "$f" ] || return 0
+    ! grep -q '\[never\]' "$f"
+}
+
+# Headers del kernel en ejecución: sin ellos DKMS no recompila el módulo NVIDIA
+# en el próximo cambio de kernel (Sección 3 Paso 4).
+check_running_kernel_headers() {
+    pkg_installed "linux-headers-$(uname -r)"
+}
+
+# Override de systemd de AnyDesk (Sección 6 Paso 2). El manual lo declara
+# obligatorio en estaciones de compresión: sin él AnyDesk crashea y congela
+# GNOME con gnome-shell al 70-100% de CPU.
+check_anydesk_override() {
+    local out
+    out=$(systemctl cat anydesk 2>/dev/null || true)
+    [[ "$out" == *LIBGL_ALWAYS_SOFTWARE* ]]
+}
+
+# =============================================================================
 # --- Detección de CUDA desde filesystem ---
 # =============================================================================
 
@@ -350,7 +492,10 @@ check_pip_package() {
 
 # Instalar paquete(s) apt
 fix_apt() {
-    sudo apt-get install -y "$@"
+    # --no-upgrade: instalar lo ausente sin tocar lo presente. Sin esto, un
+    # paquete en hold (dkms) hace abortar todo con
+    # "Held packages were changed and -y was used".
+    sudo apt-get install -y --no-upgrade "$@"
 }
 
 # Instalar paquete snap
@@ -392,8 +537,17 @@ fix_emqx_repo_and_install() {
     sudo apt-get install -y emqx
 }
 
+# --- /etc/emqx/acl.conf ---
+# EMQX 5 no arranca sin ese archivo, y dpkg trata un conffile ausente como
+# decision del admin: no lo repone ni en un reinstall normal. --force-confmiss
+# es lo unico que lo devuelve. Sintoma: paquete instalado, servicio muerto.
+fix_emqx_acl() {
+    sudo apt-get install -y --reinstall -o Dpkg::Options::=--force-confmiss emqx
+}
+
 # --- Servicio EMQX ---
 fix_emqx_service() {
+    [ -f /etc/emqx/acl.conf ] || fix_emqx_acl
     sudo systemctl start emqx && sudo systemctl enable emqx
 }
 
@@ -405,7 +559,24 @@ fix_anydesk_repo_and_install() {
     sudo chmod a+r /etc/apt/keyrings/keys.anydesk.com.asc
     echo "deb [signed-by=/etc/apt/keyrings/keys.anydesk.com.asc] https://deb.anydesk.com all main" | sudo tee /etc/apt/sources.list.d/anydesk-stable.list > /dev/null
     sudo apt-get update && sudo apt-get install -y anydesk
+    # Sin el override AnyDesk crashea y congela GNOME (Sección 6 Paso 2).
+    fix_anydesk_override
 }
+# --- Override de AnyDesk para NVIDIA/X11 (Sección 6 Paso 2) ---
+fix_anydesk_override() {
+    sudo mkdir -p /etc/systemd/system/anydesk.service.d
+    sudo tee /etc/systemd/system/anydesk.service.d/override.conf > /dev/null << 'EOFOVERRIDE'
+[Service]
+Environment=DISPLAY=:0
+Environment=XAUTHORITY=/run/user/1000/gdm/Xauthority
+Environment=LIBGL_ALWAYS_SOFTWARE=1
+ExecStartPre=/bin/sleep 5
+EOFOVERRIDE
+    sudo systemctl daemon-reload
+    sudo systemctl enable anydesk
+    sudo systemctl restart anydesk
+}
+
 
 # --- Node-RED ---
 fix_nodered() {
