@@ -323,6 +323,15 @@ sudo ufw --force enable
 
 Si no usarás acceso remoto, puedes saltar este paso.
 
+> **Un firewall activo con las reglas a medias corta servicios.** Acá UFW queda arriba
+> con solo SSH permitido, que es correcto en este punto porque todavía no hay nada más
+> instalado. Los puertos del stack (MongoDB, MQTT, dashboard de EMQX, RTSP, Node-RED,
+> AnyDesk) se agregan en las Secciones 6 y 7. Si el equipo va a correr esos servicios,
+> **no lo dejes acá**: con UFW activo y un puerto sin permitir, el servicio arranca bien
+> y aun así es inalcanzable desde la red, y el diagnóstico se va al servicio en lugar
+> del firewall. Verificá qué hay permitido con `sudo ufw show added` (funciona incluso
+> con el firewall apagado; `sudo ufw status` no lista nada si está inactivo).
+
 ### Paso 7: Aplica ajustes según tu versión de Ubuntu
 
 Primero mira tu versión:

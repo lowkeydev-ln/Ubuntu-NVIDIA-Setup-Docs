@@ -324,6 +324,15 @@ sudo ufw --force enable
 
 If you will not use remote access, you can skip this step.
 
+> **An active firewall with half the rules in place breaks services.** Here UFW comes up
+> with SSH only, which is correct at this point because nothing else is installed yet.
+> The stack ports (MongoDB, MQTT, EMQX dashboard, RTSP, Node-RED, AnyDesk) are added in
+> Sections 6 and 7. If this machine will run those services, **do not leave it like
+> this**: with UFW active and a port not allowed, the service starts fine and is still
+> unreachable from the network, and troubleshooting goes to the service instead of the
+> firewall. Check what is allowed with `sudo ufw show added` (it works even with the
+> firewall off; `sudo ufw status` lists nothing while inactive).
+
 ### Step 7: Apply adjustments for your Ubuntu version
 
 First check your version:

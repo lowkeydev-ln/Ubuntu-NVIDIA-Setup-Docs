@@ -353,6 +353,11 @@ check_and_fix_warn "AnyDesk instalado" \
 check_and_fix "AnyDesk con override X11 (obligatorio, Sección 6 Paso 2)" \
     "check_anydesk_override" \
     "fix_anydesk_override"
+# El override se aplica sobre la unit, pero la unit puede estar muerta: un
+# paquete instalado y un override correcto no son un AnyDesk que conecte.
+check_and_fix_warn "Servicio AnyDesk activo" \
+    "systemctl is-active anydesk" \
+    "sudo systemctl restart anydesk"
 check_and_fix_warn "RustDesk instalado" \
     "command -v rustdesk" \
     "fix_deb_url '${RUSTDESK_URL}'"
